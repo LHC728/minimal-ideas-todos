@@ -1,0 +1,73 @@
+/**
+ * Toast 状态（方案 §21、§60、§69）。
+ * 只用于「已完成 / 已删除 + 撤销」这类纠错提示，用户应该几乎注意不到它。
+ *
+ * 默认 8 秒：撤销入口只有几秒的话，用户「意识到点错了」的时候它已经没了，
+ * 等于没有。宁可让它多停一会儿，也不要让人错过。
+ */
+import { useSyncExternalStore } from 'react'
+
+/** 带撤销按钮的提示默认停留时长 */
+export const TOAST_UNDO_MS = 8000
+/** 纯确认类提示（不需要用户操作）的停留时长 */
+export const TOAST_NOTICE_MS = 2500
+
+export interface ToastItem {
+  id: string
+  message: string
+  actionLabel?: string
+  onAction?: () => void
+  duration: number
+}
+
+export interface ToastInput {
+  message: string
+  actionLabel?: string
+  onAction?: () => void
+  duration?: number
+}
+
+class ToastStore {
+  private listeners = new Set<() => void>()
+  private items: ToastItem[] = []
+  private seq = 0
+
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener)
+    return () => {
+      this.listeners.delete(listener)
+    }
+  }
+
+  getSnapshot = (): ToastItem[] => this.items
+
+  show(input: ToastInput): string {
+    this.seq += 1
+    const id = `toast-${this.seq}`
+    this.items = [
+      ...this.items,
+      {
+        id,
+        message: input.message,
+        actionLabel: input.actionLabel,
+        onAction: input.onAction,
+        duration: input.duration ?? TOAST_UNDO_MS,
+      },
+    ]
+    for (const listener of this.listeners) listener()
+    return id
+  }
+
+  dismiss(id: string): void {
+    const next = this.items.filter((item) => item.id !== id)
+    if (next.length === this.items.length) return
+    this.items = next
+    for (const listener of this.listeners) listener()
+  }
+}
+
+export const toaster = new ToastStore()
+
+export function useToasts(): ToastItem[] {
+  return useSyncExternalStore(toaster.subscribe, toaster.getSnapshot, toaster.getSnapshot)
+}
