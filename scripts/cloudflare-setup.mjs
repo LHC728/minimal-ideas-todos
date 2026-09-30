@@ -205,6 +205,33 @@ function preflight() {
   say('  提示：第一次运行会先下载 wrangler（几十 MB），可能要等一会儿。')
 }
 
+/**
+ * 判断 wrangler 是「跑起来了但没登录」，还是**根本没启动**。
+ *
+ * 这个区分很重要：npx 的下载缓存坏掉时（安装被中途打断的常见后果），
+ * 命令返回非 0 但输出是模块找不到 —— 如果一律报「还没登录」，
+ * 用户会跑去重新登录，而真正的问题在缓存，永远修不好。
+ */
+function looksLikeToolchainFailure(output) {
+  return /cannot find module|could not be found|ERR_MODULE_NOT_FOUND|is not recognized/i.test(
+    output,
+  )
+}
+
+function toolchainHint(output) {
+  return [
+    '这不是登录问题 —— 是 wrangler 本身没跑起来，多半是 npx 的下载缓存坏了',
+    '（常见于安装过程被中途打断）。',
+    '',
+    '不用去删那个坏缓存（删它本身也可能被拦住），换一个全新的空目录重跑即可：',
+    '',
+    '    npm_config_cache=<一个全新的空目录> npm run cloudflare:setup',
+    '',
+    '原始输出：',
+    output.trim(),
+  ]
+}
+
 function requireLogin() {
   heading(1, '确认已登录 Cloudflare')
 
@@ -212,6 +239,10 @@ function requireLogin() {
   if (DRY_RUN) return result.stdout
 
   if (result.status !== 0) {
+    const output = `${result.stdout}\n${result.stderr}`
+    if (looksLikeToolchainFailure(output)) {
+      die('wrangler 没能启动（不是登录问题）。', toolchainHint(output))
+    }
     die('还没登录 Cloudflare。', [
       '登录是一次性的，会在浏览器里点一下「同意」：',
       '',
