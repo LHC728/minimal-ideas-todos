@@ -1,5 +1,7 @@
 # 一刻
 
+[![CI](https://github.com/LHC728/yike/actions/workflows/ci.yml/badge.svg)](https://github.com/LHC728/yike/actions/workflows/ci.yml)
+
 > 想到的那一刻，就记下来。
 
 极简、本地优先、跨设备同步的「灵感 + 待办 + 时间线」工具。
