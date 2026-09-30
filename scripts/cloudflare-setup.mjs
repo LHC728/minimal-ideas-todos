@@ -211,9 +211,13 @@ function preflight() {
  * 这个区分很重要：npx 的下载缓存坏掉时（安装被中途打断的常见后果），
  * 命令返回非 0 但输出是模块找不到 —— 如果一律报「还没登录」，
  * 用户会跑去重新登录，而真正的问题在缓存，永远修不好。
+ *
+ * 后两条（EBUSY / EPERM）是同一个病的另一种表现：包已经下下来了，
+ * 但它的安装脚本（esbuild、workerd 都会去 spawn 一次 node）跑不动。
+ * 症状完全不像「没登录」，却同样和登录无关。
  */
 function looksLikeToolchainFailure(output) {
-  return /cannot find module|could not be found|ERR_MODULE_NOT_FOUND|is not recognized/i.test(
+  return /cannot find module|could not be found|ERR_MODULE_NOT_FOUND|is not recognized|EBUSY|EPERM: operation not permitted/i.test(
     output,
   )
 }
@@ -226,6 +230,16 @@ function toolchainHint(output) {
     '不用去删那个坏缓存（删它本身也可能被拦住），换一个全新的空目录重跑即可：',
     '',
     '    npm_config_cache=<一个全新的空目录> npm run cloudflare:setup',
+    '',
+    '如果换了新目录还是同样的错，那就是安装脚本本身跑不动了',
+    '（wrangler 依赖的 esbuild / workerd 会在 postinstall 里去 spawn node，',
+    ' 被拦时只报 EBUSY / EPERM，看起来和「缓存坏了」一模一样）。',
+    '这时跳过安装脚本、装到隔离目录里直接调用它的入口：',
+    '',
+    '    npm install --ignore-scripts --prefix <临时目录> wrangler@4',
+    '    node <临时目录>/node_modules/wrangler/bin/wrangler.js d1 execute ...',
+    '',
+    '（`d1 execute` 不需要 esbuild 与 workerd，跳过安装脚本不影响它。）',
     '',
     '原始输出：',
     output.trim(),
