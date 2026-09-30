@@ -79,6 +79,7 @@ scripts/
   gen-icons.mjs           生成 PWA 图标（手写 PNG 编码）
   check-base.mjs          校验构建产物路径与部署基路径一致
   check-installable.mjs   实测某个地址能否被安装为 PWA（CDP 权威判据）
+  check-sync.mjs          对着真实后端跑一遍同步接口（幂等/并发/软删除）
   cloudflare-setup.mjs    一键部署 Cloudflare 同步后端（幂等，含自测）
 ```
 
@@ -217,9 +218,10 @@ cd .. && npm run cloudflare:setup
 2. 建好（或复用）名为 `yike-sync` 的 D1 数据库
 3. 把 `database_id` 回填进 `worker/wrangler.toml`
 4. 应用 `worker/schema.sql` 建表
-5. 部署 Worker
-6. 生成一个访问令牌写进数据库（库里只存 SHA-256）
-7. **现场请求一次 `/api/health` 和 `/api/me` 自测** —— 通了才说通了
+5. 确认账号有 `workers.dev` 子域名（没有就自动注册一个）
+6. 部署 Worker
+7. 生成一个访问令牌写进数据库（库里只存 SHA-256）
+8. **现场请求一次 `/api/health` 和 `/api/me` 自测** —— 通了才说通了
 
 最后打印两样东西：
 
@@ -236,7 +238,11 @@ Worker 地址：https://yike-sync.你的子域.workers.dev
 ```bash
 npm run cloudflare:setup -- --dry-run      # 只打印，不动手
 npm run cloudflare:setup -- --token-only   # 库已建好，只补发一个新令牌
+npm run cloudflare:setup -- --subdomain=名字  # 指定 workers.dev 子域名
 ```
+
+> `--token-only` 也会自测：地址是可以推出来的（`<worker 名>.<子域名>.workers.dev`），
+> 所以补发令牌后照样会真的打一次接口，而不是让你填完才发现不通。
 
 > ⚠️ **访问令牌只在屏幕上出现那一次。** 数据库里存的是它的 SHA-256，
 > 事后无法从库里取回明文 —— 请当场复制走。
@@ -269,6 +275,31 @@ npm run cloudflare:setup -- --token-only   # 库已建好，只补发一个新�
 
 这个缺陷是写测试时实测出来的，`src/test/workerCore.test.ts` 里有一组
 「读完之后、写下去之前别人插了一脚」的用例专门钉住它 —— 用真实 SQLite 跑。
+
+> 顺带一个实测发现：**D1 返回的 `meta.changes` 对 UPDATE 会报 0**（即使确实改到了行）。
+> 所以判据只能取 SQL 里的 `changes()` 函数 —— 那是引擎自己算的，
+> 不是 D1 包在外面的统计。`core.ts` 用的是后者，不受影响。
+
+#### 部署出去之后，再对着真后端验一遍
+
+单测跑在 Node 的 SQLite 上，证明不了「部署出去的那一份」也对。
+所以还有一个打真接口的校验脚本（同样只在真环境里才有意义，
+和 `check-installable.mjs` 一个路子）：
+
+```bash
+npm run check:sync -- --url=https://yike-sync.你的子域.workers.dev --token=你的令牌
+# 或者走环境变量 YIKE_SYNC_URL / YIKE_SYNC_TOKEN
+```
+
+17 项，覆盖本地测不出来的那几件事：鉴权与路由、幂等重推、
+**并发新建同一条记录时不能有一方以为成功**、版本冲突不覆盖、软删除后
+Tombstone 仍能被 Pull 到、`createdAtUtc` 全程不变。
+
+其中「并发竞态」那三项就是 `changes()` 判据的回归测试 ——
+**如果它失败，说明线上后端会静默丢数据，必须立刻回滚部署。**
+
+它会在你的账号下建几条测试记录（id 以 `smoke-` 开头），跑完就地软删除。
+按红线不做物理删除，所以这些记录会以 Tombstone 形式留在库里，界面上看不见。
 
 #### 接口
 

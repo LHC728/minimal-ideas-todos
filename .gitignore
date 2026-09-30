@@ -21,8 +21,6 @@ playwright/.cache
 # Cloudflare Worker 的本地状态（wrangler 生成）
 .wrangler
 worker/.wrangler
-# 部署脚本的临时 SQL（含令牌哈希，执行完即删，不该进版本库）
-worker/.tmp-*.sql
 
 # 界面核对截图：由临时脚本生成，可随时重跑，不进版本库
 screenshots

@@ -14,7 +14,7 @@ enabled = true
 [[d1_databases]]
 binding = "DB"
 database_name = "yike-sync"
-database_id = "REPLACE_WITH_YOUR_DATABASE_ID"
+database_id = "b1695a46-6d37-49b7-8b0c-dcf0a17f09ac"
 
 [vars]
 # 默认放开跨域。想收紧就取消下面这行注释并改成你的站点地址：

@@ -15,6 +15,7 @@
     "verify": "tsc -b && oxlint --deny-warnings && vitest run",
     "check:base": "node scripts/check-base.mjs",
     "check:pwa": "node scripts/check-installable.mjs",
+    "check:sync": "node scripts/check-sync.mjs",
     "cloudflare:setup": "node scripts/cloudflare-setup.mjs",
     "setup": "git config core.hooksPath .githooks && echo 已启用 .githooks（pre-commit + commit-msg）",
     "icons": "node scripts/gen-icons.mjs"

@@ -10,14 +10,16 @@
  *   2. 建好（或复用）名为 yike-sync 的 D1 数据库
  *   3. 把 database_id 回填进 worker/wrangler.toml
  *   4. 应用 worker/schema.sql（create table if not exists，重复跑没关系）
- *   5. 部署 Worker
- *   6. 生成一个访问令牌，写进数据库（只存 SHA-256，明文只打印这一次）
- *   7. 现场自测：请求 /api/health 和 /api/me，确认真的通了
+ *   5. 确认账号有 workers.dev 子域名（没有就自动注册一个）
+ *   6. 部署 Worker
+ *   7. 生成一个访问令牌，写进数据库（只存 SHA-256，明文只打印这一次）
+ *   8. 现场自测：请求 /api/health 和 /api/me，确认真的通了
  *
  * 用法：
- *   npm run cloudflare:setup              # 完整流程
- *   npm run cloudflare:setup -- --dry-run # 只打印将要做什么，不真的动手
- *   npm run cloudflare:setup -- --token-only  # 库已建好，只补发一个新令牌
+ *   npm run cloudflare:setup                   # 完整流程
+ *   npm run cloudflare:setup -- --dry-run      # 只打印将要做什么，不真的动手
+ *   npm run cloudflare:setup -- --token-only   # 库已建好，只补发一个新令牌
+ *   npm run cloudflare:setup -- --subdomain=abc  # 指定 workers.dev 子域名
  *
  * 注意：这个脚本会往数据库写东西，但**永远不会删任何记录**。
  * 它也不碰你手机/电脑上的本地数据 —— 那些记录在应用自己的 IndexedDB 里。
@@ -25,8 +27,9 @@
 
 import { spawnSync } from 'node:child_process'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 
 // ---------------------------------------------------------------
 // 常量
@@ -36,16 +39,29 @@ const ROOT = process.cwd()
 const WORKER_DIR = 'worker'
 const TOML_PATH = 'worker/wrangler.toml'
 const SCHEMA_PATH = 'worker/schema.sql'
-const TEMP_SQL = '.tmp-setup.sql'
+/**
+ * 临时 SQL 的落盘位置。
+ *
+ * 放系统临时目录，不放仓库里 —— 这样不需要 .gitignore 兜着，
+ * 也不会在你 git status 里冒出一个陌生文件。
+ * 名字带随机后缀，避免两次运行互相覆盖。
+ */
+const TEMP_SQL = join(tmpdir(), `yike-setup-${randomBytes(4).toString('hex')}.sql`)
 
 const DB_NAME = 'yike-sync'
 /** 固定主版本，避免某天 wrangler 出 5.x 时脚本突然换了行为 */
 const WRANGLER = 'wrangler@4'
 const PLACEHOLDER_ID = 'REPLACE_WITH_YOUR_DATABASE_ID'
+const API_BASE = 'https://api.cloudflare.com/client/v4'
 
-const argv = new Set(process.argv.slice(2))
-const DRY_RUN = argv.has('--dry-run')
-const TOKEN_ONLY = argv.has('--token-only')
+const flags = new Map()
+for (const arg of process.argv.slice(2)) {
+  const index = arg.indexOf('=')
+  flags.set(index === -1 ? arg : arg.slice(0, index), index === -1 ? true : arg.slice(index + 1))
+}
+const DRY_RUN = flags.has('--dry-run')
+const TOKEN_ONLY = flags.has('--token-only')
+const SUBDOMAIN_WANTED = typeof flags.get('--subdomain') === 'string' ? flags.get('--subdomain') : null
 
 // ---------------------------------------------------------------
 // 输出
@@ -193,7 +209,7 @@ function requireLogin() {
   heading(1, '确认已登录 Cloudflare')
 
   const result = wrangler(['whoami'], { capture: true })
-  if (DRY_RUN) return
+  if (DRY_RUN) return result.stdout
 
   if (result.status !== 0) {
     die('还没登录 Cloudflare。', [
@@ -209,6 +225,7 @@ function requireLogin() {
     ])
   }
   say('  已登录  ✓')
+  return result.stdout
 }
 
 // ---------------------------------------------------------------
@@ -217,6 +234,12 @@ function requireLogin() {
 
 function ensureDatabase() {
   heading(2, `建好（或复用）D1 数据库「${DB_NAME}」`)
+
+  if (DRY_RUN) {
+    say(`  [dry-run] 将执行 npx ${WRANGLER} d1 list --json 查有没有现成的`)
+    say(`  [dry-run] 没有的话就 npx ${WRANGLER} d1 create ${DB_NAME}`)
+    return '<dry-run 数据库 id>'
+  }
 
   const listed = wrangler(['d1', 'list', '--json'], { capture: true })
   const parsed = extractJson(listed.stdout)
@@ -311,11 +334,136 @@ function applySchema() {
 }
 
 // ---------------------------------------------------------------
+// workers.dev 子域名
+// ---------------------------------------------------------------
+
+/** 从 `wrangler whoami` 的输出里读账号 ID */
+function accountIdFrom(whoamiOutput) {
+  const matches = whoamiOutput.match(/\b[0-9a-f]{32}\b/g) ?? []
+  if (matches.length === 0) {
+    die('没能从 wrangler 的输出里读到账号 ID。', [
+      '请手动执行下面的命令，把输出发我，或自己去控制台确认：',
+      '',
+      `    cd ${WORKER_DIR}`,
+      `    npx ${WRANGLER} whoami`,
+    ])
+  }
+  return matches[0]
+}
+
+/** 登录邮箱的用户名部分，用来当子域名的首选候选 */
+function subdomainCandidateFrom(whoamiOutput) {
+  const email = /associated with the email ([^\s!]+)/i.exec(whoamiOutput)?.[1] ?? ''
+  const name = email.split('@')[0] ?? ''
+  const cleaned = name
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 30)
+  return /^[a-z0-9]/.test(cleaned) ? cleaned : null
+}
+
+/**
+ * 确保账号有一个 workers.dev 子域名，返回它。
+ *
+ * 为什么要走这一步：wrangler 没有「注册子域名」的命令，而 deploy 在
+ * 非交互环境下遇到「还没注册子域名」只会直接失败 —— 用户就被卡在一个
+ * 只有 URL 前缀、却要跑去翻控制台的死胡同里。
+ * 令牌是 wrangler 刚写下的，这里只是替它读一次，不会外传。
+ */
+async function ensureSubdomain(whoamiOutput) {
+  heading(5, '确认 workers.dev 子域名（一次性）')
+
+  if (DRY_RUN) {
+    say('  [dry-run] 将检查并（必要时）注册一个 workers.dev 子域名')
+    return 'dry-run-subdomain'
+  }
+
+  const accountId = accountIdFrom(whoamiOutput)
+  const token = readOAuthToken()
+  if (token === null) {
+    say('  ⚠ 读不到 wrangler 的登录令牌，跳过这一步。')
+    say('    如果接下来的部署报「需要先注册 workers.dev 子域名」，去这里填一个名字：')
+    say(`    https://dash.cloudflare.com/${accountId}/workers/onboarding`)
+    return null
+  }
+
+  const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' }
+  const endpoint = `${API_BASE}/accounts/${accountId}/workers/subdomain`
+
+  const current = await fetch(endpoint, { headers })
+    .then((response) => response.json())
+    .catch(() => null)
+
+  const existing = current?.result?.subdomain
+  if (typeof existing === 'string' && existing !== '') {
+    say(`  已有子域名：${existing}.workers.dev  ✓`)
+    return existing
+  }
+
+  const candidates = [
+    SUBDOMAIN_WANTED,
+    subdomainCandidateFrom(whoamiOutput),
+    `yike-${randomBytes(3).toString('hex')}`,
+  ].filter((item) => typeof item === 'string' && item !== '')
+
+  for (const candidate of candidates) {
+    const response = await fetch(endpoint, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ subdomain: candidate }),
+    })
+    const payload = await response.json().catch(() => null)
+
+    if (response.ok && payload?.success !== false) {
+      say(`  注册好了：${candidate}.workers.dev  ✓`)
+      return candidate
+    }
+
+    const reason = payload?.errors?.[0]?.message ?? `HTTP ${response.status}`
+    say(`  「${candidate}」不可用（${reason}），换一个再试…`)
+  }
+
+  die('没能注册 workers.dev 子域名。', [
+    '名字可能都被占用了。请打开下面这个链接自己填一个，然后重新执行本脚本：',
+    '',
+    `  https://dash.cloudflare.com/${accountId}/workers/onboarding`,
+    '',
+    '也可以直接指定：npm run cloudflare:setup -- --subdomain=你想要的名字',
+  ])
+}
+
+/** 从 wrangler.toml 里读 Worker 名字（默认部署地址的第一段就是它） */
+function workerName() {
+  const content = readFileSync(resolve(ROOT, TOML_PATH), 'utf8')
+  return /^\s*name\s*=\s*"([^"]+)"/m.exec(content)?.[1] ?? 'yike-sync'
+}
+
+/**
+ * 读 wrangler 自己存的 OAuth 令牌（ensureSubdomain 拿它去调 API）。
+ * 令牌是 wrangler 刚写下的，这里只是替它读一次，不会外传。
+ */
+function readOAuthToken() {
+  const candidates = [
+    join(process.env.APPDATA ?? '', 'xdg.config', '.wrangler', 'config', 'default.toml'),
+    join(homedir(), '.config', '.wrangler', 'config', 'default.toml'),
+    join(homedir(), '.wrangler', 'config', 'default.toml'),
+  ]
+  for (const path of candidates) {
+    if (!existsSync(path)) continue
+    const matched = /oauth_token\s*=\s*"([^"]+)"/.exec(readFileSync(path, 'utf8'))
+    if (matched?.[1]) return matched[1]
+  }
+  return null
+}
+
+// ---------------------------------------------------------------
 // 部署
 // ---------------------------------------------------------------
 
 function deploy() {
-  heading(5, '部署 Worker')
+  heading(6, '部署 Worker')
 
   const result = wrangler(['deploy'], { capture: true })
   const output = `${result.stdout}\n${result.stderr}`
@@ -345,7 +493,7 @@ function deploy() {
 // ---------------------------------------------------------------
 
 function issueToken() {
-  heading(6, '生成访问令牌')
+  heading(7, '生成访问令牌')
 
   // 明文只在这里存在一次，之后库里只有它的 SHA-256
   const token = randomBytes(32).toString('base64url')
@@ -374,24 +522,33 @@ function issueToken() {
     ' where u.id = (select id from users order by created_at, id limit 1);',
   ].join('\n')
 
-  const tempPath = resolve(ROOT, WORKER_DIR, TEMP_SQL)
+  const tempPath = TEMP_SQL
 
   if (DRY_RUN) {
     say('  [dry-run] 将生成一个 43 字符的随机令牌并写入数据库')
-    say(`  [dry-run] 临时 SQL 会写到 ${WORKER_DIR}/${TEMP_SQL}，执行后删除`)
-    return { token, url: null }
+    say('  [dry-run] 临时 SQL 会写到系统临时目录，执行后删除')
+    // 这里刻意返回占位符而不是上面那个真随机串：
+    // dry-run 的收尾框会把它显示成「访问令牌」，真串会被误当成可用令牌复制走。
+    return { token: '<运行后这里会出现真实令牌>', url: null }
   }
 
   writeFileSync(tempPath, sql, 'utf8')
 
   let result
   try {
-    result = wrangler(['d1', 'execute', DB_NAME, '--remote', '--json', `--file=${TEMP_SQL}`], {
+    // 全脚本只有这一个参数带引号：临时目录的路径可能含空格
+    // （用户名里有空格就会），不引的话 Windows 上会被 shell 从空格处切断。
+    result = wrangler(['d1', 'execute', DB_NAME, '--remote', '--json', `--file="${tempPath}"`], {
       capture: true,
     })
   } finally {
-    // 里面只有令牌的哈希，不是明文，但仍然没必要留在磁盘上
-    rmSync(tempPath, { force: true })
+    // 清理失败绝不能让整轮部署白跑 —— 令牌此刻已经写进数据库了，
+    // 在这里再抛异常就等于把刚生成的明文令牌直接扔掉（真实踩过这一次）。
+    try {
+      rmSync(tempPath, { force: true })
+    } catch {
+      say(`  ⚠ 临时文件没能自动删掉，请手动删除：${tempPath}`)
+    }
   }
 
   const output = `${result.stdout}\n${result.stderr}`
@@ -422,7 +579,7 @@ function issueToken() {
 // ---------------------------------------------------------------
 
 async function selfCheck(url, token) {
-  heading(7, '现场自测（不靠猜）')
+  heading(8, '现场自测（不靠猜）')
 
   if (DRY_RUN) {
     say('  [dry-run] 将请求 /api/health 与 /api/me')
@@ -525,20 +682,31 @@ async function main() {
   if (DRY_RUN) say('（dry-run：只打印将要做什么，不会真的动手）')
 
   preflight()
-  requireLogin()
+  const whoamiOutput = requireLogin()
 
   if (TOKEN_ONLY) {
     const databaseId = readDatabaseIdFromToml()
+    // 地址是确定可推的：<wrangler.toml 里的 name>.<子域名>.workers.dev
+    // 所以「只补令牌」这条路也能现场自测，而不是让你填完才发现不通。
+    const subdomain = await ensureSubdomain(whoamiOutput)
     const { token } = issueToken()
+    const url = subdomain ? `https://${workerName()}.${subdomain}.workers.dev` : null
+    if (url !== null) {
+      await selfCheck(url, token)
+    } else {
+      say()
+      say('  ⚠ 没拿到子域名，跳过自测。填进应用后如果连不上，再跑一次完整流程。')
+    }
     say()
-    say('  只补发令牌，没有重新部署。')
-    printNextSteps('（沿用你之前填的地址，没变）', token, databaseId)
+    say('  只补发了令牌，没有重新部署。')
+    printNextSteps(url ?? '（沿用你之前填的地址，没变）', token, databaseId)
     return
   }
 
   const databaseId = ensureDatabase()
   patchToml(databaseId)
   applySchema()
+  await ensureSubdomain(whoamiOutput)
   const url = deploy()
   const { token } = issueToken()
   await selfCheck(url, token)
