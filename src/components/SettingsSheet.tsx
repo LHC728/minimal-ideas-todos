@@ -6,11 +6,15 @@ import { usePendingCount, useAllRecords } from '../hooks/useRecords'
 import { syncEngine } from '../sync/SyncEngine'
 import { useSyncStatus } from '../sync/syncStatus'
 import {
+  CLOUD_PROVIDER_LABEL,
   readCloudConfig,
   readEnvCloudConfig,
   readStoredCloudConfig,
   saveCloudConfig,
+  type CloudProviderKind,
 } from '../cloud/cloudConfig'
+import { saveCloudflareSession } from '../cloud/cloudflareSession'
+import { CloudRequestError } from '../cloud/cloudflareClient'
 import { resetSupabaseClient } from '../cloud/supabaseClient'
 import { formatChineseDateTime } from '../utils/time'
 import { uiActions } from '../app/uiStore'
@@ -31,6 +35,8 @@ const PHASE_TEXT: Record<string, string> = {
   'signed-out': '未登录',
 }
 
+const PROVIDERS: readonly CloudProviderKind[] = ['supabase', 'cloudflare']
+
 /**
  * 设置（方案 §4）：只放账号和同步状态，不作为主模块。
  */
@@ -41,8 +47,13 @@ export function SettingsSheet({ open, userId }: SettingsSheetProps) {
   const records = useAllRecords(userId)
 
   // 每次打开由调用方通过 key 重新挂载，表单初值直接来自本机配置
-  const [url, setUrl] = useState(() => readCloudConfig()?.url ?? '')
-  const [key, setKey] = useState(() => readCloudConfig()?.anonKey ?? '')
+  const stored = readCloudConfig()
+  const [provider, setProvider] = useState<CloudProviderKind>(stored?.provider ?? 'supabase')
+  const [url, setUrl] = useState(() => stored?.url ?? '')
+  const [key, setKey] = useState(() => (stored?.provider === 'supabase' ? stored.anonKey : ''))
+  const [token, setToken] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
 
   if (!open) return null
@@ -50,9 +61,54 @@ export function SettingsSheet({ open, userId }: SettingsSheetProps) {
   const envConfig = readEnvCloudConfig()
   const storedConfig = readStoredCloudConfig()
 
-  function handleSaveCloud() {
-    saveCloudConfig(url.trim() && key.trim() ? { url, anonKey: key } : null)
-    resetSupabaseClient()
+  async function handleSaveCloud() {
+    if (busy) return
+    setBusy(true)
+    setError(null)
+
+    const trimmedUrl = url.trim()
+
+    // 清空地址 = 断开云端，回到本机模式
+    if (trimmedUrl === '') {
+      saveCloudConfig(null)
+      saveCloudflareSession(null)
+      resetSupabaseClient()
+      setSaved(true)
+      setTimeout(() => window.location.reload(), 600)
+      return
+    }
+
+    if (provider === 'cloudflare') {
+      // 填了令牌就顺手验证一次 —— 先验证再落盘，不留坏配置
+      if (token.trim() !== '') {
+        try {
+          await authService.signInWithCloudflare(trimmedUrl, token)
+        } catch (err) {
+          setBusy(false)
+          setError(
+            err instanceof CloudRequestError && err.status === 401
+              ? '这个令牌不被接受。可能是打错了，或者它已经被吊销。'
+              : err instanceof TypeError
+                ? '连不上这个地址。检查一下 Worker 地址是否写对了。'
+                : err instanceof Error
+                  ? err.message
+                  : '连接失败，请稍后再试。',
+          )
+          return
+        }
+      } else {
+        saveCloudConfig({ provider: 'cloudflare', url: trimmedUrl })
+      }
+    } else {
+      if (key.trim() === '') {
+        setBusy(false)
+        setError('Supabase 需要同时填地址和 anon key。')
+        return
+      }
+      saveCloudConfig({ provider: 'supabase', url: trimmedUrl, anonKey: key })
+      resetSupabaseClient()
+    }
+
     setSaved(true)
     // 连接配置变化需要重新初始化账号与同步
     setTimeout(() => window.location.reload(), 600)
@@ -73,8 +129,14 @@ export function SettingsSheet({ open, userId }: SettingsSheetProps) {
             <span>{auth.mode === 'local' ? '本机模式' : '云端账号'}</span>
           </div>
           <div className="flex justify-between gap-4">
-            <span className="text-ink-soft">邮箱</span>
-            <span className="truncate">{auth.user?.email ?? '—'}</span>
+            <span className="text-ink-soft">后端</span>
+            <span data-testid="settings-provider">
+              {auth.provider ? CLOUD_PROVIDER_LABEL[auth.provider] : '—'}
+            </span>
+          </div>
+          <div className="flex justify-between gap-4">
+            <span className="text-ink-soft">账号</span>
+            <span className="truncate">{auth.user?.email ?? (auth.user ? '访问令牌' : '—')}</span>
           </div>
         </div>
 
@@ -139,34 +201,82 @@ export function SettingsSheet({ open, userId }: SettingsSheetProps) {
         ) : (
           <>
             <p className="mt-2 text-[13px] leading-5 text-ink-soft">
-              填入 Supabase 项目地址与 anon key 即可开启多设备同步。留空则保持仅本机使用，
-              所有功能仍然完整可用。
+              连接后手机和电脑会自动同步。留空则保持仅本机使用，所有功能仍然完整可用。
             </p>
+
+            <div className="mt-2.5 flex gap-2">
+              {PROVIDERS.map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => setProvider(item)}
+                  aria-pressed={provider === item}
+                  data-testid={`settings-provider-${item}`}
+                  className={`tap tap-active h-9 flex-1 rounded-xl border text-[13px] ${
+                    provider === item
+                      ? 'border-idea/40 bg-idea-soft text-idea'
+                      : 'border-line text-ink-soft'
+                  }`}
+                >
+                  {CLOUD_PROVIDER_LABEL[item]}
+                </button>
+              ))}
+            </div>
+
             <div className="mt-2.5 space-y-2">
               <input
                 value={url}
                 onChange={(event) => setUrl(event.target.value)}
-                placeholder="https://xxxx.supabase.co"
-                aria-label="Supabase URL"
+                placeholder={
+                  provider === 'cloudflare'
+                    ? 'https://yike-sync.xxxx.workers.dev'
+                    : 'https://xxxx.supabase.co'
+                }
+                aria-label="云端地址"
+                autoComplete="off"
                 className="w-full rounded-xl border border-line bg-canvas px-3 py-2 text-[14px] text-ink outline-none focus:border-idea/40"
               />
-              <input
-                value={key}
-                onChange={(event) => setKey(event.target.value)}
-                placeholder="anon key"
-                aria-label="Supabase anon key"
-                className="w-full rounded-xl border border-line bg-canvas px-3 py-2 text-[14px] text-ink outline-none focus:border-idea/40"
-              />
+
+              {provider === 'supabase' ? (
+                <input
+                  value={key}
+                  onChange={(event) => setKey(event.target.value)}
+                  placeholder="anon key"
+                  aria-label="Supabase anon key"
+                  autoComplete="off"
+                  className="w-full rounded-xl border border-line bg-canvas px-3 py-2 text-[14px] text-ink outline-none focus:border-idea/40"
+                />
+              ) : (
+                <input
+                  value={token}
+                  onChange={(event) => setToken(event.target.value)}
+                  placeholder="访问令牌（留空表示只改地址）"
+                  aria-label="访问令牌"
+                  autoComplete="off"
+                  className="w-full rounded-xl border border-line bg-canvas px-3 py-2 font-mono text-[13px] text-ink outline-none focus:border-idea/40"
+                />
+              )}
             </div>
+
+            {error ? (
+              <p data-testid="settings-cloud-error" className="mt-2 text-[13px] leading-5 text-danger">
+                {error}
+              </p>
+            ) : null}
+
             <button
               type="button"
-              onClick={handleSaveCloud}
-              className="tap tap-active mt-2.5 h-10 rounded-xl bg-idea px-4 text-[14px] font-medium text-white"
+              disabled={busy}
+              onClick={() => void handleSaveCloud()}
+              className="tap tap-active mt-2.5 h-10 rounded-xl bg-idea px-4 text-[14px] font-medium text-white disabled:opacity-50"
             >
-              {saved ? '已保存，正在重载…' : '保存连接'}
+              {saved ? '已保存，正在重载…' : busy ? '正在验证…' : '保存连接'}
             </button>
+
             {storedConfig ? (
-              <p className="mt-2 text-[12px] text-ink-soft">当前已保存本机连接配置。</p>
+              <p className="mt-2 text-[12px] leading-5 text-ink-soft">
+                当前已保存本机连接配置（{CLOUD_PROVIDER_LABEL[storedConfig.provider]}）。
+              </p>
             ) : null}
           </>
         )}

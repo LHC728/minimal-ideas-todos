@@ -200,6 +200,5 @@ export class NullAdapter implements CloudAdapter {
 export const supabaseAdapter = new SupabaseAdapter()
 export const nullAdapter = new NullAdapter()
 
-export function createCloudAdapter(): CloudAdapter {
-  return getSupabaseClient() ? supabaseAdapter : nullAdapter
-}
+// 适配器的分发已经移到 cloudProvider.ts ——
+// 这里再留一份会变成两个入口，迟早有人改了一处忘了另一处。

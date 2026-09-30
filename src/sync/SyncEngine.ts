@@ -5,7 +5,7 @@
  * 绝不采用简单的 Push → Pull，也绝不采用 Last Write Wins。
  */
 import type { CloudAdapter } from '../cloud/CloudAdapter'
-import { createCloudAdapter } from '../cloud/SupabaseAdapter'
+import { createCloudAdapter } from '../cloud/cloudProvider'
 import type { AuthMode } from '../auth/AuthService'
 import { pullAll, pullOne } from './PullService'
 import { reconcileMany, reconcileOne } from './ReconcileService'

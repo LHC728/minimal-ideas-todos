@@ -45,7 +45,7 @@ npm run verify     # 一键门禁：类型 + Lint + 单元测试
 | UI | Tailwind CSS v4 + Lucide |
 | 本地数据库 | IndexedDB（Dexie 4） |
 | PWA | vite-plugin-pwa（Workbox） |
-| 云 | Supabase Auth + PostgreSQL + Realtime |
+| 云（二选一） | Cloudflare Workers + D1 ／ Supabase Auth + PostgreSQL + Realtime |
 | 测试 | Vitest + Playwright |
 
 ---
@@ -64,23 +64,36 @@ src/
   db/           db.ts  recordRepository.ts  outboxRepository.ts
   sync/         SyncEngine PullService ReconcileService PushService
                 RealtimeService ConflictService NetworkWatcher syncStatus
-  cloud/        CloudAdapter  SupabaseAdapter  cloudConfig  supabaseClient
+  cloud/        CloudAdapter（唯一边界）  cloudProvider（选后端）
+                CloudflareAdapter  cloudflareClient  cloudflareSession  cloudConfig
+                SupabaseAdapter  supabaseClient
   auth/         AuthService
   hooks/        useRecords  useSyncStatus  useMediaQuery
   utils/        time  timezone  id
+worker/         Cloudflare Workers 后端（可选，不用就不部署）
+  schema.sql    D1 建表 + 把产品红线写成触发器的脚本
+  src/core.ts   鉴权与「原子应用一次 Mutation」（纯逻辑，好测）
+  src/index.ts  HTTP 层：CORS / 路由 / 请求体校验
+  wrangler.toml database_id 由 npm run cloudflare:setup 回填
 scripts/
-  gen-icons.mjs          生成 PWA 图标（手写 PNG 编码）
-  check-base.mjs         校验构建产物路径与部署基路径一致
-  check-installable.mjs  实测某个地址能否被安装为 PWA（CDP 权威判据）
+  gen-icons.mjs           生成 PWA 图标（手写 PNG 编码）
+  check-base.mjs          校验构建产物路径与部署基路径一致
+  check-installable.mjs   实测某个地址能否被安装为 PWA（CDP 权威判据）
+  cloudflare-setup.mjs    一键部署 Cloudflare 同步后端（幂等，含自测）
 ```
 
 依赖方向（严格单向）：
 
 ```
-UI → Repository / Domain → IndexedDB → SyncEngine → CloudAdapter → Supabase
+UI → Repository / Domain → IndexedDB → SyncEngine → CloudAdapter → 后端
 ```
 
-React 页面不直接调用 Supabase。
+React 页面不直接调用任何后端。`cloud/cloudProvider.ts` 是唯一的选路点，
+`cloudConfig` 里存着当前选的是哪一个。
+
+> 两套后端（Cloudflare / Supabase）语义完全等价，`CloudAdapter` 是唯一边界，
+> 同步引擎不感知差别。`src/test/workerSchema.test.ts` 会逐列比对两边的表结构 ——
+> 只改一边就会红，防止「可互换」这句话在半年后变成空话。
 
 ---
 
@@ -166,9 +179,116 @@ React 页面不直接调用 Supabase。
 
 ---
 
-## 连接云端（可选）
+## 跨设备同步（可选）
 
-### 1. 建表
+「本地优先」的意思是：**没有云也完全能用**，数据就在你自己设备上。
+想让手机和电脑看到同一份记录，才需要后端。两个方案，二选一即可。
+
+| | Cloudflare（方案 A） | Supabase（方案 B） |
+| --- | --- | --- |
+| 你要做什么 | 注册 + 跑一条命令 | 注册 + 建项目 + 贴一段 SQL |
+| 登录方式 | 访问令牌（脚本生成） | 邮箱验证码 |
+| 免费额度 | 10 万请求/天 + 5GB | 500MB 数据库 |
+| 已知的坑 | 要自己跑命令 | **项目连续 7 天没有 API 请求会被自动暂停**，需要手动恢复 |
+| 适合 | 想「以后完全不用管」 | 想用现成的账号体系 |
+
+> 无论选哪个，**你手机和电脑上现有的记录都不会丢**。
+> 同步引擎的设计是「宁可多存一份也绝不静默覆盖」，
+> 第一次同步会把你本机已有的记录一起传上去。
+
+---
+
+### 方案 A：Cloudflare（自建后端，一键部署）
+
+后端代码就在本仓库的 `worker/` 里，部署脚本会把它推到你自己的 Cloudflare 账号下。
+免费额度对个人使用远远够，而且没有「闲置就被暂停」的问题。
+
+**你只需要做两件事**：注册一个 Cloudflare 账号（免费、不用绑卡），
+然后执行一条命令。
+
+```bash
+cd worker && npx wrangler login    # 浏览器里点一下「同意」，一次性
+cd .. && npm run cloudflare:setup
+```
+
+脚本会依次：
+
+1. 确认已登录
+2. 建好（或复用）名为 `yike-sync` 的 D1 数据库
+3. 把 `database_id` 回填进 `worker/wrangler.toml`
+4. 应用 `worker/schema.sql` 建表
+5. 部署 Worker
+6. 生成一个访问令牌写进数据库（库里只存 SHA-256）
+7. **现场请求一次 `/api/health` 和 `/api/me` 自测** —— 通了才说通了
+
+最后打印两样东西：
+
+```
+Worker 地址：https://yike-sync.你的子域.workers.dev
+访问令牌　：一长串随机字符
+```
+
+把它们填进应用「**设置 → 云端同步 → Cloudflare（自建）**」，保存后点「登录」。
+手机和电脑填**同一份**地址和令牌。
+
+脚本可以反复执行，不会弄坏已有的东西；先看它打算做什么就加 `--dry-run`：
+
+```bash
+npm run cloudflare:setup -- --dry-run      # 只打印，不动手
+npm run cloudflare:setup -- --token-only   # 库已建好，只补发一个新令牌
+```
+
+> ⚠️ **访问令牌只在屏幕上出现那一次。** 数据库里存的是它的 SHA-256，
+> 事后无法从库里取回明文 —— 请当场复制走。
+> 丢了不要紧，重跑一次 `--token-only` 就会发一个新的（旧的仍然有效）。
+
+#### 产品红线是数据库约束，不是文档里的约定
+
+`worker/schema.sql` 里有四个触发器，把「不能丢数据」这件事变成了数据库拒绝执行：
+
+| 红线 | 数据库怎么拦 |
+| --- | --- |
+| 删除只能是软删除 | `before delete` 直接 `raise(abort)` —— 物理删除永远失败 |
+| 创建时间永不改变 | `before update` 逐列比较 `new` 与 `old`，改了就中止 |
+| `version` 单调递增 | 任何不让 `version` 变大的 UPDATE 一律中止 |
+| 幂等结果不可改写 | 已落定的 `applied_mutations` 行不许再 update |
+
+为什么不只写在文档里：**文档靠人记，触发器不靠。**
+将来任何人（包括我）写错一条 SQL，数据库会直接拒绝，而不是悄悄破坏承诺。
+
+#### 写入的原子性靠 `changes()`，不靠「先查再写」
+
+记录写入与幂等记录写在同一个 batch（同一事务）里，而幂等记录**只在
+「这一条 INSERT 真的改动了行」时才写**（`where changes() = 1`）。
+
+不用 `where exists (select 1 from records ...)` 那种间接判断：设想两台设备
+同时新建同一条记录（同一个 id、两个 mutationId），先到的那条写进去了，
+后到的那条被 `on conflict do nothing` 悄悄跳过 —— 但 `exists` 依然为真，
+于是后到的那条也会被记成「已应用」，它带的更新内容被丢掉。
+客户端以为推送成功，之后 Pull 回来覆盖本地。**这就是静默丢数据。**
+
+这个缺陷是写测试时实测出来的，`src/test/workerCore.test.ts` 里有一组
+「读完之后、写下去之前别人插了一脚」的用例专门钉住它 —— 用真实 SQLite 跑。
+
+#### 接口
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/health` | 健康检查，不需要令牌 |
+| `GET` | `/api/me` | 令牌对应的账号 |
+| `POST` | `/api/sync/pull` | 拉取全部 Record（含软删除 Tombstone） |
+| `GET` | `/api/sync/record?id=` | 拉取单条 |
+| `POST` | `/api/sync/mutate` | 原子应用一次 Mutation |
+
+鉴权：`Authorization: Bearer <访问令牌>`。
+出错时**绝不返回看起来成功的响应** —— 客户端会把失败当成已应用，
+那才是真正的丢数据。所以一律 500，让 outbox 保留 mutation 稍后重试。
+
+---
+
+### 方案 B：Supabase（用现成的托管服务）
+
+#### 1. 建表
 
 在 Supabase 项目的 SQL Editor 中执行：
 
@@ -182,7 +302,7 @@ supabase/migrations/0001_init.sql
 - 用户只能 `SELECT` / `INSERT` / `UPDATE` 自己的数据（`user_id = auth.uid()`）
 - **故意不创建 DELETE 策略** → 物理删除在数据库层面被彻底禁止
 
-### 2. 配置连接
+#### 2. 配置连接
 
 方式一：构建期环境变量
 
@@ -196,7 +316,7 @@ npm run build
 
 打开右上角「设置 → 云端连接」，粘贴 Supabase URL 与 anon key 并保存。
 
-### 3. 登录
+#### 3. 登录
 
 已配置云端时，首次使用要求登录（邮箱验证码 / Magic Link）。
 从本机模式首次登录时，本机已有记录会自动归入该账号，不会丢失。
@@ -206,7 +326,7 @@ npm run build
 ## 测试
 
 ```bash
-npm run verify    # 类型检查 + Lint + 71 项单元 / 集成测试
+npm run verify    # 类型检查 + Lint + 198 项单元 / 集成测试
 npm run test      # 只跑 Vitest
 npm run test:e2e  # Playwright：24 项 E2E（桌面 12 + 手机 12）
 ```
@@ -249,6 +369,32 @@ npm run test:e2e   # 终端 B
 多设备通过 `FakeCloudServer`（内存版，行为与 `0001_init.sql` 完全一致）
 + 切换独立 IndexedDB 顺序模拟。
 
+### 同步后端（Cloudflare）的测试
+
+| 文件 | 测什么 | 数量 |
+| --- | --- | --- |
+| `workerCore.test.ts` | 鉴权 / 幂等 / 版本冲突 / 创建时间不可变 / 跨账号隔离 / 竞态 | 39 |
+| `workerHttp.test.ts` | 401 / 400 / 404 / CORS / 跨域 / **出错绝不返回成功** | 38 |
+| `workerSchema.test.ts` | 触发器是否真在拦、两套后端表结构是否逐列一致 | 16 |
+| `cloudflareAdapter.test.ts` | 字段归一、状态透传、**失败不装成功** | 34 |
+
+**这些测试跑在真实 SQLite 上**（Node 22 内置的 `node:sqlite`，见
+`src/test/sqliteD1.ts`），并且会加载 `worker/schema.sql` 的触发器。
+
+这一点是刻意的：产品的四条红线在 Cloudflare 这一侧**全部是 SQL 触发器实现的**。
+如果用一个手写的假 D1，那些触发器在测试里根本不会运行 ——
+测了半天，恰好把最该守的底线漏掉。用真实 SQLite 还附带一个好处：
+SQLite 就是 D1 的引擎，所以 `on conflict do nothing`、`insert ... select ... where exists`、
+`raise(abort, ...)` 的行为和线上是同一套语义。
+
+已知差异（如实记录）：本替身是单连接，D1 是多副本的分布式 SQLite，
+所以这里测不到「跨副本最终一致」那类问题，只测单次请求内的原子性。
+
+> `node:sqlite` 在 Node 22.13+ 默认可用，更早的版本要加 `--experimental-sqlite`。
+> 它是 Node 的**实验性** API，选择它而不是 `better-sqlite3` / `sql.js`，
+> 是为了不引入新依赖、也不用编译原生模块。真出问题时表现是明确的报错，
+> 不会静默放过 —— 这个取舍是清楚的。
+
 ---
 
 ## 代码审查
@@ -262,7 +408,7 @@ npm run test:e2e   # 终端 B
 | CI | `.github/workflows/ci.yml` | 静态门禁 → 单元测试 → 构建 + E2E |
 | 发布 | `.github/workflows/deploy-pages.yml` | 等 CI 全绿 → 子路径构建 → 校验产物路径 → 发布 |
 
-当前基线：**tsc 0 错误 / oxlint 0 warning（222 条规则）/ 71 项单测全绿**。
+当前基线：**tsc 0 错误 / oxlint 0 warning（222 条规则）/ 198 项单测全绿**。
 
 - 📋 **[代码审查标准与流程](docs/代码审查标准与流程.md)** —— 优先级判据、
   高风险区清单、三级门禁、测试分层策略、审查清单、例外处理
@@ -314,7 +460,7 @@ PWA 支持本身没问题，但部分机型的自带浏览器会把「添加到�
 
 装成 PWA 之后的数据仍然存在手机本机（IndexedDB）。
 **如果换浏览器或清了浏览器数据，本机记录会丢** —— 想跨设备/防丢，去
-[连接云端](#连接云端可选) 把同步打开。
+[跨设备同步](#跨设备同步可选) 把同步打开。
 
 ### Linux 上使用
 

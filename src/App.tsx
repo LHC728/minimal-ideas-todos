@@ -5,7 +5,7 @@ import { Toaster } from './components/Toaster'
 import { toaster } from './app/toastStore'
 import { authService, currentUserId } from './auth/AuthService'
 import { useAuth } from './hooks/useSyncStatus'
-import { createCloudAdapter } from './cloud/SupabaseAdapter'
+import { createCloudAdapter } from './cloud/cloudProvider'
 import { syncEngine } from './sync/SyncEngine'
 
 export default function App() {

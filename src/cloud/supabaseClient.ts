@@ -9,7 +9,9 @@ let cached: { url: string; key: string; client: SupabaseClient } | null = null
 
 export function getSupabaseClient(): SupabaseClient | null {
   const config = readCloudConfig()
-  if (!config) return null
+  // 配的是 Cloudflare 时不能返回 Supabase 客户端 ——
+  // 否则同步引擎会拿着自建后端的配置去连 Supabase，报一堆莫名其妙的错。
+  if (!config || config.provider !== 'supabase') return null
   if (cached && cached.url === config.url && cached.key === config.anonKey) {
     return cached.client
   }

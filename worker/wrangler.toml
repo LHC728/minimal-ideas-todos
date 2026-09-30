@@ -1,0 +1,23 @@
+# 一刻 — Cloudflare Worker 配置
+#
+# database_id 由 `npm run cloudflare:setup` 自动写入（它会建库并回填这里）。
+# 手动部署时也可以从 `npx wrangler d1 list` 里拿到后自己填。
+
+name = "yike-sync"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+
+# Workers 日志（wrangler tail 用）
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "yike-sync"
+database_id = "REPLACE_WITH_YOUR_DATABASE_ID"
+
+[vars]
+# 默认放开跨域。想收紧就取消下面这行注释并改成你的站点地址：
+# 本项目用 Bearer 令牌鉴权、不带 Cookie，所以放开跨域不涉及 CSRF；
+# 收紧只是额外的卫生习惯，不是必须。
+# ALLOWED_ORIGINS = "https://lhc728.github.io"

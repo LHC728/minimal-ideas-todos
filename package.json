@@ -15,11 +15,12 @@
     "verify": "tsc -b && oxlint --deny-warnings && vitest run",
     "check:base": "node scripts/check-base.mjs",
     "check:pwa": "node scripts/check-installable.mjs",
+    "cloudflare:setup": "node scripts/cloudflare-setup.mjs",
     "setup": "git config core.hooksPath .githooks && echo 已启用 .githooks（pre-commit + commit-msg）",
     "icons": "node scripts/gen-icons.mjs"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.2",
