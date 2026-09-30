@@ -272,7 +272,7 @@ export async function getConflict(recordId: string): Promise<ConflictEntry | und
 
 export async function listConflicts(userId: string): Promise<ConflictEntry[]> {
   const list = await db.conflicts.where('userId').equals(userId).toArray()
-  return list.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1))
+  return list.toSorted((a, b) => (a.createdAt < b.createdAt ? -1 : 1))
 }
 
 export async function countConflicts(userId: string): Promise<number> {

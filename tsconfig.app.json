@@ -21,7 +21,20 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+
+    /*
+     * 以下三项由代码审查机制（docs/代码审查标准与流程.md §3）强制要求。
+     * 开启 noUncheckedIndexedAccess 时全库只有 11 处需要调整，成本极低，
+     * 而它正好能抓到「split('-') 后直接 Number()」这类真实缺陷。
+     *
+     * 评估过但**故意不启用**：noPropertyAccessFromIndexSignature
+     * （全库 45 处报错，绝大多数是 import.meta.env / process.env 的点号访问，
+     * 收益仅是写法风格，改动面却很大）。
+     */
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true
   },
   "include": ["src", "scripts"]
 }

@@ -7,9 +7,62 @@
  *  - 服务器时间（server_updated_at）只用于同步，绝不覆盖用户记录时间。
  *
  * 所有函数都是纯函数，便于测试。
+ *
+ * ⚠️ 本文件的总则（2026-10 代码审查后确立，见 docs/代码审查-基线审计报告.md）：
+ *
+ *   对**任意输入**都必须返回有意义的值，绝不允许
+ *     ① 抛出异常，或
+ *     ② 返回 NaN / "NaN月NaN日" / {year: null} 这类假值。
+ *
+ *   给不出正确答案时，明确返回空字符串或 null，由调用方决定如何降级。
+ *   理由：时间字段会从云端（created_at_utc / created_local_date）流进来，
+ *   一条格式损坏的远端记录不该让整个界面白屏，也不该显示一个看似正常、
+ *   实则错误的日期 —— 后者比直接失败更难排查。
  */
 
 const FALLBACK_TZ = 'UTC'
+
+const WEEKDAY_NAMES = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
+
+/** YYYY-MM-DD 的严格形状。只做形状校验，语义校验在 parseLocalDate */
+const LOCAL_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/
+
+export interface DateParts {
+  year: number
+  month: number
+  day: number
+}
+
+/** 规整为 Date；无法解析时返回 null（**不返回 Invalid Date**） */
+function toDate(input: string | number | Date): Date | null {
+  const date = input instanceof Date ? input : new Date(input)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+/**
+ * 严格解析 YYYY-MM-DD。
+ *
+ * 返回 null 表示输入不是合法日历日：形状不符、月份越界、或该月没有这一天
+ * （例如 2026-02-30、2026-13-01）。
+ *
+ * 这是本文件所有「纯日期字符串」函数的**唯一入口**。历史上它们直接
+ * `split('-')` 后 `Number()`，于是：
+ *   formatChineseDate("bad")   → "NaN年NaN月NaN日"
+ *   monthOf("bad")             → { year: null }
+ *   dayOfWeek("2026-13-45")    → 0   ← 静默溢出到 2027-02-14，不报错但日期是错的
+ */
+export function parseLocalDate(localDate: string): DateParts | null {
+  const match = LOCAL_DATE_PATTERN.exec(localDate)
+  if (!match) return null
+  const [, rawYear, rawMonth, rawDay] = match
+  if (rawYear === undefined || rawMonth === undefined || rawDay === undefined) return null
+  const year = Number(rawYear)
+  const month = Number(rawMonth)
+  const day = Number(rawDay)
+  if (month < 1 || month > 12) return null
+  if (day < 1 || day > daysInMonth(year, month)) return null
+  return { year, month, day }
+}
 
 /** 当前设备的 IANA 时区，例如 Asia/Shanghai */
 export function deviceTimeZone(): string {
@@ -41,14 +94,16 @@ export function nowIso(): string {
   return new Date().toISOString()
 }
 
-/** 把任意时间输入规整为 ISO 字符串 */
+/** 把任意时间输入规整为 ISO 字符串；无法解析时返回空字符串 */
 export function toIso(input: string | number | Date): string {
-  return new Date(input).toISOString()
+  const date = toDate(input)
+  return date ? date.toISOString() : ''
 }
 
-/** 取某个时刻在指定时区下的日历日：YYYY-MM-DD */
+/** 取某个时刻在指定时区下的日历日：YYYY-MM-DD；无法解析时返回空字符串 */
 export function localDateOf(input: string | number | Date, tz?: string | null): string {
-  const date = input instanceof Date ? input : new Date(input)
+  const date = toDate(input)
+  if (!date) return ''
   const zone = safeTz(tz)
   try {
     // en-CA 输出 YYYY-MM-DD
@@ -59,13 +114,14 @@ export function localDateOf(input: string | number | Date, tz?: string | null): 
       day: '2-digit',
     }).format(date)
   } catch {
-    return formatDatePartsFallback(date, 'UTC')
+    return formatDatePartsFallback(date)
   }
 }
 
-/** 取某个时刻在指定时区下的 HH:mm（24 小时制） */
+/** 取某个时刻在指定时区下的 HH:mm（24 小时制）；无法解析时返回空字符串 */
 export function formatHm(input: string | number | Date, tz?: string | null): string {
-  const date = input instanceof Date ? input : new Date(input)
+  const date = toDate(input)
+  if (!date) return ''
   const zone = safeTz(tz)
   try {
     return new Intl.DateTimeFormat('en-GB', {
@@ -75,52 +131,58 @@ export function formatHm(input: string | number | Date, tz?: string | null): str
       hourCycle: 'h23',
     }).format(date)
   } catch {
-    return fallbackTimeParts(date, 'UTC')
+    return fallbackTimeParts(date)
   }
 }
 
-/** 2026年9月30日 */
+/** 2026年9月30日；输入非法时返回空字符串 */
 export function formatChineseDate(localDate: string): string {
-  const [y, m, d] = localDate.split('-')
-  return `${Number(y)}年${Number(m)}月${Number(d)}日`
+  const parts = parseLocalDate(localDate)
+  if (!parts) return ''
+  return `${parts.year}年${parts.month}月${parts.day}日`
 }
 
-/** 2026年9月30日 00:43 */
+/** 2026年9月30日 00:43；无法解析时返回空字符串 */
 export function formatChineseDateTime(input: string | number | Date, tz?: string | null): string {
-  const date = input instanceof Date ? input : new Date(input)
+  const date = toDate(input)
+  if (!date) return ''
   const zone = safeTz(tz)
   return `${formatChineseDate(localDateOf(date, zone))} ${formatHm(date, zone)}`
 }
 
-/** 9月30日 */
+/** 9月30日；输入非法时返回空字符串 */
 export function formatMonthDay(localDate: string): string {
-  const [, m, d] = localDate.split('-')
-  return `${Number(m)}月${Number(d)}日`
+  const parts = parseLocalDate(localDate)
+  if (!parts) return ''
+  return `${parts.month}月${parts.day}日`
 }
 
-/** 9 月 30 日（带空格，用于标题） */
+/** 9 月 30 日（带空格，用于标题）；输入非法时返回空字符串 */
 export function formatMonthDaySpaced(localDate: string): string {
-  const [y, m, d] = localDate.split('-')
-  return `${y} 年 ${Number(m)} 月 ${Number(d)} 日`
+  const parts = parseLocalDate(localDate)
+  if (!parts) return ''
+  return `${parts.year} 年 ${parts.month} 月 ${parts.day} 日`
 }
 
-/** 星期三 */
+/** 星期三；输入非法时返回空字符串 */
 export function formatWeekday(localDate: string): string {
-  const names = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
   const idx = dayOfWeek(localDate)
-  return names[idx] ?? ''
+  if (idx === null) return ''
+  return WEEKDAY_NAMES[idx] ?? ''
 }
 
-/** 0 = 周日 … 6 = 周六（纯日期运算，不涉及时区） */
-export function dayOfWeek(localDate: string): number {
-  const [y, m, d] = localDate.split('-').map(Number)
-  return new Date(Date.UTC(y, m - 1, d)).getUTCDay()
+/** 0 = 周日 … 6 = 周六（纯日期运算，不涉及时区）；输入非法时返回 null */
+export function dayOfWeek(localDate: string): number | null {
+  const parts = parseLocalDate(localDate)
+  if (!parts) return null
+  return new Date(Date.UTC(parts.year, parts.month - 1, parts.day)).getUTCDay()
 }
 
-/** 纯日期字符串的加减，返回 YYYY-MM-DD */
+/** 纯日期字符串的加减，返回 YYYY-MM-DD；输入非法时原样返回（不臆造日期） */
 export function addDays(localDate: string, days: number): string {
-  const [y, m, d] = localDate.split('-').map(Number)
-  const base = new Date(Date.UTC(y, m - 1, d))
+  const parts = parseLocalDate(localDate)
+  if (!parts) return localDate
+  const base = new Date(Date.UTC(parts.year, parts.month - 1, parts.day))
   base.setUTCDate(base.getUTCDate() + days)
   return base.toISOString().slice(0, 10)
 }
@@ -130,7 +192,7 @@ export function todayLocalDate(tz?: string | null): string {
   return localDateOf(new Date(), tz)
 }
 
-/** 今天 / 昨天 / 9月30日 */
+/** 今天 / 昨天 / 9月30日；输入非法时返回空字符串 */
 export function relativeDayLabel(localDate: string, tz?: string | null): string {
   const today = todayLocalDate(tz)
   if (localDate === today) return '今天'
@@ -144,19 +206,30 @@ export function relativeDayLabel(localDate: string, tz?: string | null): string 
  *
  * 待办页「已完成」区专用：那里显示的是**完成时刻**，不是创建时刻，
  * 所以必须把「完成」两个字写出来，否则会被误读成创建时间。
+ *
+ * 时间无法解析时返回空字符串 —— 宁可不显示，也不显示一个错的完成时间。
  */
 export function formatDoneStamp(iso: string, tz?: string | null): string {
-  return `${relativeDayLabel(localDateOf(iso, tz), tz)} ${formatHm(iso, tz)} 完成`
+  const day = relativeDayLabel(localDateOf(iso, tz), tz)
+  const hm = formatHm(iso, tz)
+  if (!day && !hm) return ''
+  return `${day} ${hm} 完成`
 }
 
-/** 两个 ISO 时刻是否同一天（按时区） */
+/** 两个 ISO 时刻是否同一天（按时区）；任一侧无法解析时返回 false */
 export function isSameLocalDate(a: string, b: string, tz?: string | null): boolean {
-  return localDateOf(a, tz) === localDateOf(b, tz)
+  const dayA = localDateOf(a, tz)
+  const dayB = localDateOf(b, tz)
+  if (!dayA || !dayB) return false
+  return dayA === dayB
 }
 
-/** 两个 ISO 时刻的先后，返回较晚的一个 */
+/** 两个 ISO 时刻的先后，返回较晚的一个；任一侧无法解析时退化为返回 a */
 export function maxIso(a: string, b: string): string {
-  return new Date(a).getTime() >= new Date(b).getTime() ? a : b
+  const ta = toDate(a)?.getTime()
+  const tb = toDate(b)?.getTime()
+  if (ta === undefined || tb === undefined) return a
+  return ta >= tb ? a : b
 }
 
 /** 某个日历日所在月的信息 */
@@ -165,9 +238,22 @@ export interface MonthInfo {
   month: number // 1-12
 }
 
-export function monthOf(localDate: string): MonthInfo {
-  const [y, m] = localDate.split('-').map(Number)
-  return { year: y, month: m }
+/** 某个日历日所在月；输入非法时返回 null（调用方必须显式降级） */
+export function monthOf(localDate: string): MonthInfo | null {
+  const parts = parseLocalDate(localDate)
+  if (!parts) return null
+  return { year: parts.year, month: parts.month }
+}
+
+/**
+ * 当前设备时钟所在月。
+ *
+ * 纯 Date getter，不解析任何字符串，因此**永不失败** ——
+ * 专门用作 monthOf() 返回 null 时的降级值。
+ */
+export function currentMonth(): MonthInfo {
+  const now = new Date()
+  return { year: now.getFullYear(), month: now.getMonth() + 1 }
 }
 
 export function toLocalDateString(year: number, month: number, day: number): string {
@@ -191,7 +277,8 @@ export function daysInMonth(year: number, month: number): number {
  */
 export function monthGrid(info: MonthInfo): (string | null)[] {
   const first = toLocalDateString(info.year, info.month, 1)
-  const lead = (dayOfWeek(first) + 6) % 7 // 周一为 0
+  // first 由 toLocalDateString 生成，形状必然合法，?? 0 只为满足类型系统
+  const lead = ((dayOfWeek(first) ?? 0) + 6) % 7 // 周一为 0
   const total = daysInMonth(info.year, info.month)
   const cells: (string | null)[] = []
   for (let i = 0; i < lead; i += 1) cells.push(null)
@@ -206,16 +293,17 @@ export function formatMonthTitle(info: MonthInfo): string {
 }
 
 // ---- 内部兜底实现（Intl 不可用时） ----
+//
+// 注意：这两个函数**不依赖 Intl**，全部用 Date 的 UTC getter 手工拼接。
+// 上一版它们自己也调用 Intl，导致 catch 分支在 Invalid Date 上抛出同样的
+// RangeError —— 兜底形同虚设（见基线审计报告 §3.2）。
 
-function formatDatePartsFallback(date: Date, tz: string): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(date)
+function formatDatePartsFallback(date: Date): string {
+  return toLocalDateString(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate())
 }
 
-function fallbackTimeParts(date: Date, tz: string): string {
-  return new Intl.DateTimeFormat('en-GB', {
-    timeZone: tz,
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).format(date)
+function fallbackTimeParts(date: Date): string {
+  const hh = String(date.getUTCHours()).padStart(2, '0')
+  const mm = String(date.getUTCMinutes()).padStart(2, '0')
+  return `${hh}:${mm}`
 }

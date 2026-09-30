@@ -26,7 +26,7 @@ export function SearchPanel({ userId, open, timezone }: SearchPanelProps) {
       if (list) list.push(record)
       else map.set(record.createdLocalDate, [record])
     }
-    return Array.from(map.entries()).sort((a, b) => (a[0] < b[0] ? 1 : -1))
+    return Array.from(map.entries()).toSorted((a, b) => (a[0] < b[0] ? 1 : -1))
   }, [results])
 
   if (!open) return null

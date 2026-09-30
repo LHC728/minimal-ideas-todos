@@ -85,12 +85,15 @@ export function compressMutations(existing: Mutation, incoming: Mutation): Mutat
   const operation = pickOperation(existing.operation, incoming.operation)
   const payload = mergePayload(existing.payload, incoming.payload)
 
-  // create 路径需要完整字段，补齐不可变字段
+  // create 路径需要完整字段，补齐不可变字段。
+  // baseSnapshot 的 created* 在类型上就是必填 string，所以「取不到时保留原值」
+  // 等价于原来的 `base || payload`，但写成 if 之后类型上是完备的。
   if (operation === 'create') {
+    const { createdAtUtc, createdTimezone, createdLocalDate } = existing.baseSnapshot
     payload.type = incoming.payload.type ?? existing.payload.type ?? existing.baseSnapshot.type
-    payload.createdAtUtc = existing.baseSnapshot.createdAtUtc || payload.createdAtUtc
-    payload.createdTimezone = existing.baseSnapshot.createdTimezone || payload.createdTimezone
-    payload.createdLocalDate = existing.baseSnapshot.createdLocalDate || payload.createdLocalDate
+    if (createdAtUtc) payload.createdAtUtc = createdAtUtc
+    if (createdTimezone) payload.createdTimezone = createdTimezone
+    if (createdLocalDate) payload.createdLocalDate = createdLocalDate
   }
 
   return {

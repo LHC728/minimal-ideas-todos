@@ -17,13 +17,18 @@
 
 ```bash
 npm install
+npm run setup      # 启用 git 提交门禁（跑一次即可）
 npm run dev        # 开发（http://localhost:5173）
 npm run build      # 生产构建（含类型检查）
 npm run preview    # 预览构建产物
+npm run verify     # 一键门禁：类型 + Lint + 单元测试
 ```
 
 开箱即用：**不配置云端也能完整使用**，此时进入「本机模式」，
 所有数据保存在浏览器 IndexedDB，离线、断网、飞行模式都正常工作。
+
+> `npm run setup` 只是把 git 的 `core.hooksPath` 指向仓库内的 `.githooks/`，
+> 不安装任何依赖。不跑也不影响开发，只是提交前不会自动检查。
 
 ---
 
@@ -49,6 +54,7 @@ src/
   components/   QuickCapture RecordRow RecordNode CompletedTodoRow RecordDetail
                 TodoCheckbox DateGroup MonthCalendar BottomNav DesktopSidebar
                 SyncIndicator ConflictDialog SearchPanel SettingsSheet Modal Toaster
+                ErrorBoundary
   domain/       record.ts（Record 领域模型）  mutation.ts（同步单元）
   db/           db.ts  recordRepository.ts  outboxRepository.ts
   sync/         SyncEngine PullService ReconcileService PushService
@@ -191,7 +197,8 @@ npm run build
 ## 测试
 
 ```bash
-npm test          # Vitest：62 项单元 / 集成测试
+npm run verify    # 类型检查 + Lint + 71 项单元 / 集成测试
+npm run test      # 只跑 Vitest
 npm run test:e2e  # Playwright：24 项 E2E（桌面 12 + 手机 12）
 ```
 
@@ -232,6 +239,25 @@ npm run test:e2e   # 终端 B
 
 多设备通过 `FakeCloudServer`（内存版，行为与 `0001_init.sql` 完全一致）
 + 切换独立 IndexedDB 顺序模拟。
+
+---
+
+## 代码审查
+
+本仓库的质量靠**机制**兜住，不靠记性：
+
+| 层级 | 在哪里 | 内容 |
+| --- | --- | --- |
+| 提交前 | `.githooks/pre-commit` | `npm run verify`（tsc + oxlint + vitest） |
+| 提交信息 | `.githooks/commit-msg` | Conventional Commits 格式 |
+| CI | `.github/workflows/ci.yml` | 静态门禁 → 单元测试 → 构建 + E2E |
+
+当前基线：**tsc 0 错误 / oxlint 0 warning（222 条规则）/ 71 项单测全绿**。
+
+- 📋 **[代码审查标准与流程](docs/代码审查标准与流程.md)** —— 优先级判据、
+  高风险区清单、三级门禁、测试分层策略、审查清单、例外处理
+- 🔍 **[基线审计报告](docs/代码审查-基线审计报告.md)** —— 制定标准前做的实测审计，
+  含两个实测出的真实缺陷及其修复过程
 
 ---
 

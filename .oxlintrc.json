@@ -1,8 +1,22 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
+  "plugins": ["react", "typescript", "oxc", "unicorn", "import", "jsx-a11y", "promise"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "warn"
+  },
   "rules": {
     "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
+    "react/only-export-components": ["warn", { "allowConstantExport": true }],
+
+    "react/react-in-jsx-scope": "off",
+    "import/no-unassigned-import": "off",
+    "import/no-named-as-default": "off",
+    "no-await-in-loop": "off",
+    "no-new": "off",
+    "jsx-a11y/no-autofocus": "off",
+    "promise/always-return": "off",
+    "unicorn/consistent-function-scoping": "off"
   }
 }

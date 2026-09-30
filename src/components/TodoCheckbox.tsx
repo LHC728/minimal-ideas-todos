@@ -17,6 +17,9 @@ export function TodoCheckbox({ checked, onToggle, label }: TodoCheckboxProps) {
   return (
     <button
       type="button"
+      // 自绘勾选框：视觉 19px、触摸区 44×44，无法直接用原生 input 实现。
+      // role=checkbox + aria-checked 正是 ARIA 对这种自定义控件的标准写法。
+      // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
       role="checkbox"
       aria-checked={checked}
       aria-label={label ?? (checked ? '标记为未完成' : '标记为完成')}

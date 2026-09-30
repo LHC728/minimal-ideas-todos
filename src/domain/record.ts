@@ -212,6 +212,6 @@ export function groupByLocalDate<T extends LocalRecord>(records: T[]): DateGroup
     else map.set(record.createdLocalDate, [record])
   }
   return Array.from(map.entries())
-    .sort((a, b) => (a[0] < b[0] ? 1 : -1))
-    .map(([date, items]) => ({ date, items: items.slice().sort(byCreatedAtDesc) }))
+    .toSorted((a, b) => (a[0] < b[0] ? 1 : -1))
+    .map(([date, items]) => ({ date, items: items.toSorted(byCreatedAtDesc) }))
 }

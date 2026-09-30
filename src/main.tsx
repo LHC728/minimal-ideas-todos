@@ -2,13 +2,17 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
+import { ErrorBoundary } from './components/ErrorBoundary'
 
 const container = document.getElementById('root')
 if (!container) throw new Error('root container not found')
 
 createRoot(container).render(
   <StrictMode>
-    <App />
+    {/* 边界必须在 App 之外 —— 挂在里面的话，App 自身抛错就没人接了 */}
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 )
 

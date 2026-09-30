@@ -4,6 +4,7 @@ import { RecordRow } from '../components/RecordRow'
 import { useRecordDates, useRecordsOnDate } from '../hooks/useRecords'
 import { uiActions, useUi } from '../app/uiStore'
 import {
+  currentMonth,
   deviceTimeZone,
   formatMonthDay,
   formatWeekday,
@@ -26,7 +27,8 @@ interface PageProps {
 export function CalendarPage({ userId }: PageProps) {
   const timezone = deviceTimeZone()
   const today = todayLocalDate(timezone)
-  const [info, setInfo] = useState<MonthInfo>(() => monthOf(today))
+  // today 来自 todayLocalDate()，必然合法；currentMonth() 是类型系统要求的降级值
+  const [info, setInfo] = useState<MonthInfo>(() => monthOf(today) ?? currentMonth())
 
   const ui = useUi()
   const selectedDate = ui.selectedDate ?? today
@@ -55,7 +57,7 @@ export function CalendarPage({ userId }: PageProps) {
           onSelect={(date) => uiActions.selectDate(date)}
           onShiftMonth={(delta) => setInfo((prev) => shiftMonth(prev, delta))}
           onToday={() => {
-            setInfo(monthOf(today))
+            setInfo(monthOf(today) ?? currentMonth())
             uiActions.selectDate(today)
           }}
         />

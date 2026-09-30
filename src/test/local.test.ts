@@ -45,9 +45,9 @@ describe('Test 1：离线创建', () => {
 
     const records = await db.records.toArray()
     expect(records).toHaveLength(1)
-    expect(records[0].content).toBe('以后可以研究机器人 Agent')
-    expect(records[0].type).toBe('idea')
-    expect(records[0].syncState).toBe('pending')
+    expect(records[0]?.content).toBe('以后可以研究机器人 Agent')
+    expect(records[0]?.type).toBe('idea')
+    expect(records[0]?.syncState).toBe('pending')
   })
 
   it('创建不产生任何网络依赖：Record 与 Outbox 在同一个事务里落盘', async () => {
@@ -61,8 +61,8 @@ describe('Test 1：离线创建', () => {
 
     const pending = await listAllPending(USER)
     expect(pending).toHaveLength(1)
-    expect(pending[0].operation).toBe('create')
-    expect(pending[0].baseServerVersion).toBeNull()
+    expect(pending[0]?.operation).toBe('create')
+    expect(pending[0]?.baseServerVersion).toBeNull()
   })
 })
 
@@ -175,7 +175,7 @@ describe('待办页「已完成」区（撤销误打勾）', () => {
     await completeTodo(first.id, '2026-09-30T03:00:00.000Z', TZ)
 
     const records = await db.records.where('userId').equals(USER).toArray()
-    const done = records.filter(isDoneTodo).sort(byCompletedAtDesc)
+    const done = records.filter(isDoneTodo).toSorted(byCompletedAtDesc)
 
     expect(done.map((r) => r.content)).toEqual(['先完成的', '后完成的'])
   })
@@ -239,7 +239,7 @@ describe('Test 12：完成不改变归档日', () => {
     expect(onOct3).toHaveLength(0)
 
     const detail = onSep30[0]
-    expect(detail.completedAtUtc).toBe('2026-10-03T08:22:00.000Z')
+    expect(detail?.completedAtUtc).toBe('2026-10-03T08:22:00.000Z')
   })
 })
 
@@ -273,8 +273,8 @@ describe('时间线排序与分组', () => {
     const groups = groupByLocalDate(records.filter(isOnTimeline))
 
     expect(groups).toHaveLength(1)
-    expect(groups[0].date).toBe('2026-09-30')
-    expect(groups[0].items.map((r) => r.content)).toEqual(['C', 'B', 'A'])
+    expect(groups[0]?.date).toBe('2026-09-30')
+    expect(groups[0]?.items.map((r) => r.content)).toEqual(['C', 'B', 'A'])
   })
 
   it('离线连续编辑只压缩成一个待发送 Mutation', async () => {
@@ -293,8 +293,8 @@ describe('时间线排序与分组', () => {
     const pending = await listAllPending(USER)
     expect(pending).toHaveLength(1)
     // create 链路保持 create 语义，payload 收敛为最终状态
-    expect(pending[0].operation).toBe('create')
-    expect(pending[0].payload.content).toBe('第 6 版')
-    expect(pending[0].baseServerVersion).toBeNull()
+    expect(pending[0]?.operation).toBe('create')
+    expect(pending[0]?.payload.content).toBe('第 6 版')
+    expect(pending[0]?.baseServerVersion).toBeNull()
   })
 })

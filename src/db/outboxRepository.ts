@@ -13,7 +13,7 @@ import type { RecordSnapshot } from '../domain/record'
 export async function listPendingForRecord(recordId: string): Promise<Mutation[]> {
   const list = await db.outbox.where('[recordId+state]').equals([recordId, 'pending']).toArray()
   const sending = await db.outbox.where('[recordId+state]').equals([recordId, 'sending']).toArray()
-  return [...list, ...sending].sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1))
+  return [...list, ...sending].toSorted((a, b) => (a.createdAt < b.createdAt ? -1 : 1))
 }
 
 /** 某条记录是否有正在发送的 Mutation（此时不参与 Reconcile，等下一轮） */
@@ -25,7 +25,7 @@ export async function hasSendingForRecord(recordId: string): Promise<boolean> {
 export async function listAllPending(userId: string): Promise<Mutation[]> {
   const list = await db.outbox.where('[userId+state]').equals([userId, 'pending']).toArray()
   const failed = await db.outbox.where('[userId+state]').equals([userId, 'failed']).toArray()
-  return [...list, ...failed].sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1))
+  return [...list, ...failed].toSorted((a, b) => (a.createdAt < b.createdAt ? -1 : 1))
 }
 
 export async function countPending(userId: string): Promise<number> {
@@ -44,7 +44,7 @@ export async function enqueueMutation(mutation: Mutation): Promise<void> {
     .where('[recordId+state]')
     .equals([mutation.recordId, 'pending'])
     .toArray()
-  const existing = pendings.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1))[0]
+  const existing = pendings.toSorted((a, b) => (a.createdAt < b.createdAt ? -1 : 1))[0]
 
   if (existing && canCompress(existing, mutation)) {
     const compressed = compressMutations(existing, mutation)

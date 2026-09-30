@@ -1,0 +1,85 @@
+# 一刻 —— 持续集成门禁
+#
+# 三级门禁（对应 docs/代码审查标准与流程.md §3）：
+#   1. 静态：tsc 类型检查 + oxlint（warning 也视为失败）
+#   2. 单元：vitest
+#   3. 端到端：build 后用真实 Chromium 跑 e2e
+#
+# 任何一级失败即整体失败，PR 不允许合并。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# 同一分支上的旧运行自动取消，省额度也省等待
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: 类型 / Lint / 单元测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查
+        run: npx tsc -b
+
+      # --deny-warnings：warning 也返回非零退出码。
+      # 本项目当前是 0 warning，这条门禁保证它不会悄悄涨回去。
+      - name: Lint
+        run: npx oxlint --deny-warnings
+
+      - name: 单元测试
+        run: npx vitest run --reporter=dot
+
+  e2e:
+    name: 构建 / 端到端
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [verify]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 安装 Chromium
+        run: npx playwright install --with-deps chromium
+
+      # preview 读的是 dist/，必须先构建
+      - name: 构建
+        run: npm run build
+
+      - name: 端到端测试
+        run: npx playwright test
+
+      - name: 失败时保留现场
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: test-results/
+          retention-days: 7

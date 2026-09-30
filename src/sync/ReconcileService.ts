@@ -51,9 +51,10 @@ export async function reconcileOne(cloud: CloudRecord, stats?: ReconcileStats): 
   }
 
   const pendings = await listPendingForRecord(cloud.id)
+  const [oldest] = pendings
 
   // 情况 A：本机没有未同步修改
-  if (pendings.length === 0) {
+  if (oldest === undefined) {
     if (local.serverVersion !== cloud.version) {
       await applyCloudRecord(cloud)
       if (stats) stats.adopted += 1
@@ -61,7 +62,6 @@ export async function reconcileOne(cloud: CloudRecord, stats?: ReconcileStats): 
     return
   }
 
-  const oldest = pendings[0]
   const base = oldest.baseSnapshot
   const localSnapshot = snapshotOf(local)
   const remoteSnapshot = snapshotOfCloud(cloud)

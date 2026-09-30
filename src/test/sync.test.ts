@@ -86,7 +86,7 @@ describe('Test 3：离线补同步', () => {
     await sync()
     const onB = await db.records.toArray()
     expect(onB).toHaveLength(3)
-    expect(onB.map((r) => r.content).sort()).toEqual(['A', 'B', 'C'])
+    expect(onB.map((r) => r.content).toSorted()).toEqual(['A', 'B', 'C'])
     expect(await listAllPending(ACCOUNT)).toHaveLength(0)
   })
 })
@@ -102,8 +102,9 @@ describe('Test 4：多次重试不重复', () => {
     await sync()
     expect(server.rows.size).toBe(1)
 
-    const recordId = Array.from(server.rows.keys())[0]
-    const versionAfterFirst = server.rows.get(recordId)!.version
+    const [recordId] = Array.from(server.rows.keys())
+    if (recordId === undefined) throw new Error('第一次同步后应该有且只有一条记录')
+    const versionAfterFirst = server.rows.get(recordId)?.version
 
     // 客户端重试
     await sync()
@@ -111,7 +112,7 @@ describe('Test 4：多次重试不重复', () => {
 
     expect(server.rows.size).toBe(1)
     // version 只增加了一次
-    expect(server.rows.get(recordId)!.version).toBe(versionAfterFirst)
+    expect(server.rows.get(recordId)?.version).toBe(versionAfterFirst)
     // 服务端确实收到了重复请求，但只有一次真正生效
     expect(server.received.length).toBeGreaterThan(1)
     expect(new Set(server.received).size).toBe(1)
@@ -156,7 +157,7 @@ describe('Test 6：漏掉 Realtime 也能补回来', () => {
     // 完全不触发 Realtime，直接做一次完整同步
     await sync()
     expect(await db.records.count()).toBe(1)
-    expect((await db.records.toArray())[0].content).toBe('离线期间创建')
+    expect((await db.records.toArray())[0]?.content).toBe('离线期间创建')
   })
 })
 
@@ -181,13 +182,13 @@ describe('Test 7：同时修改同一字段', () => {
 
     const conflicts = await listConflicts(ACCOUNT)
     expect(conflicts).toHaveLength(1)
-    expect(conflicts[0].kind).toBe('field')
-    expect(conflicts[0].fields).toContain('content')
+    expect(conflicts[0]?.kind).toBe('field')
+    expect(conflicts[0]?.fields).toContain('content')
 
     // 三个版本都还在
-    expect(conflicts[0].base.content).toBe('AAA')
-    expect(conflicts[0].local.content).toBe('BBB')
-    expect(conflicts[0].remote.content).toBe('CCC')
+    expect(conflicts[0]?.base.content).toBe('AAA')
+    expect(conflicts[0]?.local.content).toBe('BBB')
+    expect(conflicts[0]?.remote.content).toBe('CCC')
 
     // 本机内容没有被静默覆盖
     const local = await db.records.get(record.id)
@@ -286,8 +287,8 @@ describe('Test 10：删除与编辑冲突', () => {
 
     const conflicts = await listConflicts(ACCOUNT)
     expect(conflicts).toHaveLength(1)
-    expect(conflicts[0].kind).toBe('delete-edit')
-    expect(conflicts[0].local.content).toBe('离线编辑后的内容')
+    expect(conflicts[0]?.kind).toBe('delete-edit')
+    expect(conflicts[0]?.local.content).toBe('离线编辑后的内容')
 
     // 本机内容仍然在，服务器上也还没有复活
     expect((await db.records.get(record.id))?.content).toBe('离线编辑后的内容')
@@ -373,11 +374,11 @@ describe('离线连续修改压缩（§58）', () => {
 
     const pending = await listAllPending(ACCOUNT)
     expect(pending).toHaveLength(1)
-    expect(pending[0].operation).toBe('update')
-    expect(pending[0].payload.content).toBe('第 6 版')
+    expect(pending[0]?.operation).toBe('update')
+    expect(pending[0]?.payload.content).toBe('第 6 版')
     // baseServerVersion / baseSnapshot 保留最初那一份
-    expect(pending[0].baseServerVersion).toBe(1)
-    expect(pending[0].baseSnapshot.content).toBe('第一版')
+    expect(pending[0]?.baseServerVersion).toBe(1)
+    expect(pending[0]?.baseSnapshot.content).toBe('第一版')
 
     server.offline = false
     await sync()

@@ -81,6 +81,8 @@ export function MonthCalendar({
         ))}
 
         {cells.map((date, index) => {
+          // 空位格子没有身份可言 —— 位置就是它的身份，这里用 index 是刻意的。
+          // oxlint-disable-next-line react/no-array-index-key
           if (!date) return <div key={`empty-${index}`} className="h-10" />
 
           const day = Number(date.split('-')[2])

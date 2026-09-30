@@ -1,0 +1,18 @@
+# git hooks 必须用 LF 结尾 —— CRLF 会让 sh 报 "bad interpreter"。
+# Windows 上 core.autocrlf 默认为 true，不锁死的话 hook 一 clone 就坏。
+.githooks/* text eol=lf
+
+# shell 脚本同理
+*.sh text eol=lf
+
+# 其余文本文件统一 LF，避免跨平台 diff 噪音
+* text=auto eol=lf
+
+# 二进制资源不做转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary

@@ -7,12 +7,17 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "oxlint",
+    "lint": "oxlint --deny-warnings",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "npm run build && playwright test",
+    "verify": "tsc -b && oxlint --deny-warnings && vitest run",
+    "setup": "git config core.hooksPath .githooks && echo 已启用 .githooks（pre-commit + commit-msg）",
     "icons": "node scripts/gen-icons.mjs"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.2",

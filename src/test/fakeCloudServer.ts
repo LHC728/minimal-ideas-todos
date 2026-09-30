@@ -61,7 +61,8 @@ export class FakeCloudServer implements CloudAdapter {
     if (this.offline) throw new Error('network_unavailable')
     return Array.from(this.rows.values())
       .filter((row) => row.userId === userId)
-      .map((row) => ({ ...row }))
+      // 深拷贝：模拟真实的网络边界，本地改动绝不能透过引用影响「服务器」
+      .map((row) => structuredClone(row))
   }
 
   async pullOne(userId: string, recordId: string): Promise<CloudRecord | null> {

@@ -32,6 +32,8 @@ export function QuickCapture({ userId }: QuickCaptureProps) {
     if (!el) return
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 180)}px`
+    // value 在这里只作为「输入变了，重新量一次高度」的触发器，effect 体内刻意不读它。
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies
   }, [value])
 
   // 桌面端自动聚焦：光标在输入框里闪，是最直接的「在这里打字」提示。

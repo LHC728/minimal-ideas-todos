@@ -1,0 +1,23 @@
+#!/bin/sh
+#
+# 一刻 —— 提交前门禁（原生 git hook）
+#
+# 启用：npm run setup
+# 临时跳过：git commit --no-verify（仅限紧急情况 —— CI 仍会拦住）
+#
+# 只做「必须拦住」的检查：类型 + Lint + 单元测试。
+# 端到端测试**刻意不在这里跑**：它要起浏览器和 preview 服务，太慢，留给 CI。
+#
+# 见 docs/代码审查标准与流程.md §3
+
+set -e
+
+# 只看本次暂存的文件；纯文档 / 资源改动直接放行
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+if ! printf '%s\n' "$staged" | grep -qE '\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|json|css)$'; then
+  exit 0
+fi
+
+echo "→ 提交前检查：tsc + oxlint + vitest"
+npm run verify
+echo "✓ 提交前检查通过"

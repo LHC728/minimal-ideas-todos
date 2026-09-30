@@ -23,7 +23,7 @@ import { countConflicts, resolveConflict, type ConflictChoice } from '../sync/Co
 const EMPTY: LocalRecord[] = []
 
 function sortDesc(records: LocalRecord[]): LocalRecord[] {
-  return records.slice().sort(byCreatedAtDesc)
+  return records.toSorted(byCreatedAtDesc)
 }
 
 /** 该用户全部记录（含软删除，同步层需要） */
@@ -62,7 +62,7 @@ export function useOpenTodos(userId: string | null): LocalRecord[] {
  */
 export function useDoneTodos(userId: string | null): LocalRecord[] {
   const records = useAllRecords(userId)
-  return records.filter(isDoneTodo).sort(byCompletedAtDesc)
+  return records.filter(isDoneTodo).toSorted(byCompletedAtDesc)
 }
 
 /** 日历归档：按 created_local_date（§23、§24、§80） */

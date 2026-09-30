@@ -35,6 +35,9 @@ export function Modal({ open, onClose, title, children, footer, widthClass = 'md
         aria-hidden
       />
       <div
+        // 用 role=dialog 而非原生 <dialog>：这里需要「手机上从底部升起、
+        // 桌面上居中」的受控动画，原生 dialog 的 top-layer 会打断过渡。
+        // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
         role="dialog"
         aria-modal="true"
         className={`animate-sheet-up relative flex max-h-[88vh] w-full flex-col overflow-hidden rounded-t-2xl border border-line bg-surface md:rounded-2xl ${widthClass}`}
