@@ -103,7 +103,7 @@ export function ConflictDialog({ userId }: ConflictDialogProps) {
               disabled={busy}
               onClick={() => void decide('local')}
               data-testid="conflict-keep-edit"
-              className="tap tap-active h-10 rounded-xl bg-idea px-4 text-[14.5px] font-medium text-white disabled:opacity-50"
+              className="tap tap-active h-10 rounded-xl bg-idea px-4 text-[14.5px] font-medium text-on-idea disabled:opacity-50"
             >
               恢复并保留本机内容
             </button>
@@ -124,7 +124,7 @@ export function ConflictDialog({ userId }: ConflictDialogProps) {
               disabled={busy}
               onClick={() => void decide('local')}
               data-testid="conflict-keep-local"
-              className="tap tap-active h-10 rounded-xl bg-idea px-4 text-[14.5px] font-medium text-white disabled:opacity-50"
+              className="tap tap-active h-10 rounded-xl bg-idea px-4 text-[14.5px] font-medium text-on-idea disabled:opacity-50"
             >
               保留本机
             </button>

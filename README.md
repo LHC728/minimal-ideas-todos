@@ -13,6 +13,9 @@
 
 核心体验：**想到 → 写下 → 继续做自己的事情。**
 
+浅色 / 深色 / 跟随系统三态主题，在「设置 → 外观」里切。
+主题只是一组 CSS 令牌换值（`html.dark`），组件里没有任何一处判断当前主题。
+
 ---
 
 ## 快速开始
@@ -54,7 +57,7 @@ npm run verify     # 一键门禁：类型 + Lint + 单元测试
 
 ```
 src/
-  app/          router / AppShell / uiStore / navItems
+  app/          router / AppShell / uiStore / navItems / themeStore（三态主题）
   pages/        HomePage  IdeasPage  CalendarPage  TodosPage  LoginPage
   components/   QuickCapture RecordRow RecordNode CompletedTodoRow RecordDetail
                 TodoCheckbox DateGroup MonthCalendar BottomNav DesktopSidebar
@@ -78,6 +81,7 @@ worker/         Cloudflare Workers 后端（可选，不用就不部署）
 scripts/
   gen-icons.mjs           生成 PWA 图标（手写 PNG 编码）
   check-base.mjs          校验构建产物路径与部署基路径一致
+  check-contrast.mjs      从 index.css 解析真实令牌算 WCAG 对比度（浅色 + 深色）
   check-installable.mjs   实测某个地址能否被安装为 PWA（CDP 权威判据）
   check-sync.mjs          对着真实后端跑一遍同步接口（幂等/并发/软删除）
   check-app-sync.mjs      真浏览器走真界面 → 确认真落到线上数据库（双向）
@@ -377,10 +381,18 @@ npm run build
 ## 测试
 
 ```bash
-npm run verify    # 类型检查 + Lint + 198 项单元 / 集成测试
-npm run test      # 只跑 Vitest
-npm run test:e2e  # Playwright：24 项 E2E（桌面 12 + 手机 12）
+npm run verify         # 类型检查 + Lint + 214 项单元 / 集成测试
+npm run test           # 只跑 Vitest
+npm run test:e2e       # Playwright：30 项 E2E（桌面 15 + 手机 15）
+npm run check:contrast # 配色对比度（WCAG AA，浅色 + 深色）
 ```
+
+`check:contrast` 从 `src/index.css` 解析**真实令牌**逐对计算对比度，
+不另抄一份颜色值 —— 它量的是浏览器实际会用到的颜色。已进 CI 门禁。
+
+> 为什么值得单独有这条：上一版文档里 `idea` 写着 4.6:1，实测只有 **3.11:1**
+> （白字压在赭石主按钮上更是只有 3.28:1），两轮改版都没发现 ——
+> 十六进制字符串看不出对比度。
 
 E2E 跑的是构建产物，所以要先构建：
 
@@ -446,6 +458,18 @@ SQLite 就是 D1 的引擎，所以 `on conflict do nothing`、`insert ... selec
 > 是为了不引入新依赖、也不用编译原生模块。真出问题时表现是明确的报错，
 > 不会静默放过 —— 这个取舍是清楚的。
 
+### 主题与配色
+
+| 文件 / 脚本 | 测什么 | 数量 |
+| --- | --- | --- |
+| `theme.test.ts` | 显式选择优先于系统、脏值/抛错兜底、`setMode` 落 DOM 与存储、**`index.html` 防闪脚本与存储键不许漂移** | 16 |
+| `check-contrast.mjs` | 从 `index.css` 解析真实令牌，逐对算 WCAG 对比度（浅色 18 对 + 深色 18 对） | 36 |
+| `e2e` 暗色模式 | 切换后刷新仍是深色、**首屏不闪**、跟随系统（系统变了自己跟着变） | 3 × 2 端 |
+
+主题本身只有「加/去一个类」，所以在 jsdom 里断言它等于什么都没验 ——
+真正会出问题的是**刷新之后还在不在**、**首帧会不会闪白**、**系统变了跟不跟**，
+这三件事只在真浏览器里跨一次真实导航才成立。
+
 ---
 
 ## 代码审查
@@ -456,10 +480,10 @@ SQLite 就是 D1 的引擎，所以 `on conflict do nothing`、`insert ... selec
 | --- | --- | --- |
 | 提交前 | `.githooks/pre-commit` | `npm run verify`（tsc + oxlint + vitest） |
 | 提交信息 | `.githooks/commit-msg` | Conventional Commits 格式 |
-| CI | `.github/workflows/ci.yml` | 静态门禁 → 单元测试 → 构建 + E2E |
+| CI | `.github/workflows/ci.yml` | 静态门禁 + 对比度 → 单元测试 → 构建 + E2E |
 | 发布 | `.github/workflows/deploy-pages.yml` | 等 CI 全绿 → 子路径构建 → 校验产物路径 → 发布 |
 
-当前基线：**tsc 0 错误 / oxlint 0 warning（222 条规则）/ 198 项单测全绿**。
+当前基线：**tsc 0 错误 / oxlint 0 warning（222 条规则）/ 214 项单测 + 30 项 E2E 全绿**。
 
 - 📋 **[代码审查标准与流程](docs/代码审查标准与流程.md)** —— 优先级判据、
   高风险区清单、三级门禁、测试分层策略、审查清单、例外处理

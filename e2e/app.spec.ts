@@ -306,6 +306,69 @@ test.describe('同步状态可见（§65）', () => {
   })
 })
 
+test.describe('暗色模式', () => {
+  test('切到深色后刷新仍然是深色，选择被记住', async ({ page }) => {
+    await openApp(page)
+    await expect(page.locator('html')).not.toHaveClass(/dark/)
+
+    await page.getByTestId('open-settings').click()
+    await page.getByTestId('settings-theme-dark').click()
+    await expect(page.getByTestId('settings-theme-dark')).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.locator('html')).toHaveClass(/dark/)
+
+    // 地址栏 / 状态栏颜色必须跟着令牌走，不能还是浅色那条
+    const themeColor = await page.evaluate(() =>
+      document.querySelector('meta[name="theme-color"]')?.getAttribute('content'),
+    )
+    const canvas = await page.evaluate(() =>
+      getComputedStyle(document.documentElement).getPropertyValue('--color-canvas').trim(),
+    )
+    expect(themeColor).toBe(canvas)
+
+    await page.reload()
+    await expect(page.locator('html')).toHaveClass(/dark/)
+
+    // 重新打开设置，选中状态也要还在（读的是存储，不是内存）
+    await page.getByTestId('open-settings').click()
+    await expect(page.getByTestId('settings-theme-dark')).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  test('首屏不闪：偏好是深色时，React 挂载之前 <html> 就已经是 dark', async ({ page }) => {
+    // 模拟「第二次打开应用」—— 上一轮选过深色，存储里已经有值
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem('inspiration-todo/theme', 'dark')
+      } catch {
+        // about:blank 之类取不到存储的场景，忽略即可
+      }
+    })
+    await page.goto('/')
+
+    // 此刻 React 还没渲染完，但防闪脚本已经跑过了
+    await expect(page.locator('html')).toHaveClass(/dark/)
+    await expect(page.getByTestId('quick-capture')).toBeVisible()
+  })
+
+  test('跟随系统：系统深色就深色，显式选浅色后不再跟', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await openApp(page)
+    await expect(page.locator('html')).toHaveClass(/dark/)
+
+    await page.getByTestId('open-settings').click()
+
+    // 显式选浅色 → 即使系统是深色，也不许跟着变
+    await page.getByTestId('settings-theme-light').click()
+    await expect(page.locator('html')).not.toHaveClass(/dark/)
+
+    // 选回「跟随系统」→ 立刻按系统当前状态落回深色
+    await page.getByTestId('settings-theme-system').click()
+    await expect(page.locator('html')).toHaveClass(/dark/)
+
+    await page.emulateMedia({ colorScheme: 'light' })
+    await expect(page.locator('html')).not.toHaveClass(/dark/)
+  })
+})
+
 test.describe('移动端体验（§70）', () => {
   test('不允许横向溢出，输入区可用', async ({ page }) => {
     await openApp(page)

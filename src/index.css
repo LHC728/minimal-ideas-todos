@@ -4,10 +4,15 @@
    设计令牌 V2：暖纸感 / 安静 / 但绝不隐形
 
    三条硬规则：
-   1. 任何承载信息的文字，对比度不低于 4.5:1（WCAG AA）。
-      ink 15.2:1 · ink-soft 6.1:1 · ink-faint 3.1:1（仅装饰，不承载信息）
+   1. 任何承载信息的文字，对比度不低于 4.5:1（WCAG AA）；
+      仅用于装饰的 ink-faint 不低于 3:1（WCAG 非文本对比度）。
+      **这条规则由 `npm run check:contrast` 逐对实测量住** ——
+      十六进制看不出对比度，上一版就是靠眼睛看，结果 idea 实际只有 3.11:1
+      而文档里写着 4.6:1。
    2. 字号阶梯相邻至少差 2px，否则人眼分辨不出，等于没有层级。
    3. 按钮形状恒定，只用颜色表达状态；绝不用整体透明表达禁用。
+
+   深色主题见文件末尾的 `html.dark`：只换值、不换名字。
    --------------------------------------------------------------- */
 @theme {
   /* 底色：暖纸感 */
@@ -25,12 +30,22 @@
   --color-line-soft: #f0eeea;
 
   /* 语义色：灵感 = 赭石（暖、发散） / 待办 = 雾蓝（冷、行动） */
-  --color-idea: #b8843f;
+  --color-idea: #8f5d21;
   --color-idea-soft: #f7f1e8;
-  --color-todo: #4f7391;
+  --color-todo: #4a6d8a;
   --color-todo-soft: #eaf0f5;
 
   --color-danger: #b4544b;
+
+  /* 实心色块上的文字与图标（主按钮的文案、打勾的勾）。
+     它不是「白色」—— 深色主题下底色会变浅，压在上面的必须反过来是深色。
+     写成令牌，是为了让「文字压在实心色上」这件事也能被对比度脚本量到：
+     原先隐式的白色压在赭石上只有 3.28:1，一直没被发现。 */
+  --color-on-idea: #ffffff;
+  --color-on-todo: #ffffff;
+
+  /* 弹层背后的遮罩 */
+  --color-scrim: rgba(28, 28, 30, 0.28);
 
   --font-sans:
     -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
@@ -102,6 +117,16 @@
 }
 
 @layer base {
+  :root {
+    /* 阴影的墨色。跟着主题走：深色底上再压一层半透明黑才有层次，
+       而浅色底上必须是极淡的墨色，否则会脏。 */
+    --shadow-card: rgba(31, 35, 40, 0.04);
+    --shadow-pop: rgba(31, 35, 40, 0.28);
+
+    /* 让原生滚动条、日期选择器等跟随主题，而不是永远浅色 */
+    color-scheme: light;
+  }
+
   html {
     -webkit-text-size-adjust: 100%;
     text-size-adjust: 100%;
@@ -175,7 +200,60 @@
 @utility card-raised {
   border: 0.5px solid var(--color-line);
   background: var(--color-surface);
-  box-shadow: 0 1px 2px rgba(31, 35, 40, 0.04);
+  box-shadow: 0 1px 2px var(--shadow-card);
+}
+
+/* 浮层（Toast / 抽屉 / 弹窗）：全项目仅此两处允许出现阴影。 */
+@utility float-raised {
+  box-shadow: 0 6px 24px -12px var(--shadow-pop);
+}
+
+/* ---------------------------------------------------------------
+   深色主题
+
+   只换值、不换名字 —— 所有 `bg-canvas` / `text-ink` 这样的类名原样生效，
+   组件里一行都不用改。
+
+   两个刻意的选择：
+   1. **不用纯黑（#000）**。纯黑上的浅色文字会发光晕，长时间看很累；
+      而且会把「暖纸」这个性格丢掉。这里用的是偏暖的深炭色（R > G > B），
+      和浅色底 #faf9f7 的暖调是同一个方向。
+   2. **层级关系与浅色完全一致**：surface 永远比 canvas 更靠前（更亮），
+      sunken 永远更凹陷（更暗）。浅色里是「白卡片浮在米色底上」，
+      深色里就是「浅炭卡片浮在深炭底上」—— 切主题不会出现
+      「卡片反而凹进去」的错觉。
+
+   语义色在深底上整体提亮（赭石 → 浅赭石、雾蓝 → 浅雾蓝），
+   实心色块上的文字则反过来用深色。全部数值由 `npm run check:contrast` 实测。
+   --------------------------------------------------------------- */
+html.dark {
+  --color-canvas: #1a1817;
+  --color-surface: #24221e;
+  --color-sunken: #121110;
+
+  --color-ink: #f2efe9;
+  --color-ink-soft: #a8a29a;
+  --color-ink-faint: #787168;
+
+  --color-line: #33302b;
+  --color-line-soft: #272420;
+
+  --color-idea: #d2a259;
+  --color-idea-soft: #2c2318;
+  --color-todo: #8db1cd;
+  --color-todo-soft: #1c2831;
+
+  --color-danger: #dd8a80;
+
+  --color-on-idea: #17161a;
+  --color-on-todo: #17161a;
+
+  --color-scrim: rgba(0, 0, 0, 0.62);
+
+  --shadow-card: rgba(0, 0, 0, 0.4);
+  --shadow-pop: rgba(0, 0, 0, 0.6);
+
+  color-scheme: dark;
 }
 
 @media (prefers-reduced-motion: reduce) {

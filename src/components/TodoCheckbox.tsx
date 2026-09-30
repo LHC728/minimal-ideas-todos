@@ -35,7 +35,7 @@ export function TodoCheckbox({ checked, onToggle, label }: TodoCheckboxProps) {
         }`}
         aria-hidden
       >
-        {checked ? <Check size={13} strokeWidth={3} className="text-white" /> : null}
+        {checked ? <Check size={13} strokeWidth={3} className="text-on-todo" /> : null}
       </span>
     </button>
   )

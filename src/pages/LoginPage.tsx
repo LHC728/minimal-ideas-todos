@@ -91,7 +91,7 @@ function TokenLogin() {
           type="button"
           disabled={busy}
           onClick={() => void connect()}
-          className="tap tap-active mt-4 h-11 w-full rounded-xl bg-idea text-[15px] font-medium text-white disabled:opacity-50"
+          className="tap tap-active mt-4 h-11 w-full rounded-xl bg-idea text-[15px] font-medium text-on-idea disabled:opacity-50"
         >
           {busy ? '正在连接…' : '连接'}
         </button>
@@ -183,7 +183,7 @@ function EmailCodeLogin() {
           type="button"
           disabled={busy}
           onClick={() => (stage === 'email' ? void sendCode() : void verify())}
-          className="tap tap-active mt-4 h-11 w-full rounded-xl bg-idea text-[15px] font-medium text-white disabled:opacity-50"
+          className="tap tap-active mt-4 h-11 w-full rounded-xl bg-idea text-[15px] font-medium text-on-idea disabled:opacity-50"
         >
           {stage === 'email' ? '发送验证码' : '登录'}
         </button>

@@ -148,7 +148,7 @@ function RecordDetailBody({ recordId, onClose }: { recordId: string; onClose: ()
               disabled={saving}
               onClick={() => void handleSave()}
               data-testid="detail-save"
-              className="tap tap-active h-10 rounded-[10px] bg-idea px-4 text-[14px] font-medium text-white disabled:opacity-50"
+              className="tap tap-active h-10 rounded-[10px] bg-idea px-4 text-[14px] font-medium text-on-idea disabled:opacity-50"
             >
               保存
             </button>

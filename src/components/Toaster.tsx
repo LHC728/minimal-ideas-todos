@@ -9,7 +9,7 @@ function ToastRow({ item }: { item: ToastItem }) {
   }, [item.id, item.duration])
 
   return (
-    <div className="animate-toast-in pointer-events-auto flex items-center gap-4 rounded-[12px] border border-line bg-surface px-4 py-2.5 shadow-[0_6px_24px_-12px_rgba(31,35,40,0.28)]">
+    <div className="animate-toast-in float-raised pointer-events-auto flex items-center gap-4 rounded-[12px] border border-line bg-surface px-4 py-2.5">
       <span className="text-[13px] text-ink-soft">{item.message}</span>
       {item.actionLabel ? (
         <button

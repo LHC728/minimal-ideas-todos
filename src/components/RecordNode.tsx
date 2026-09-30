@@ -34,7 +34,7 @@ export function RecordNode({ type, completed = false, className = '' }: RecordNo
         className={`flex h-[11px] w-[11px] shrink-0 items-center justify-center rounded-[3px] bg-todo ${className}`}
         aria-hidden
       >
-        <Check size={8} strokeWidth={3.2} className="text-white" />
+        <Check size={8} strokeWidth={3.2} className="text-on-todo" />
       </span>
     )
   }

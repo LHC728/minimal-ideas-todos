@@ -4,10 +4,7 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/icons/icon-192.png" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
-    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#FAF9F7" />
     <meta
       name="description"
@@ -18,6 +15,32 @@
     <meta name="apple-mobile-web-app-title" content="一刻" />
     <meta name="mobile-web-app-capable" content="yes" />
     <title>一刻</title>
+    <script>
+      /*
+       * 首屏不闪。
+       *
+       * 主题类必须在浏览器画出第一帧之前就定下来。放到 React 里再设的话，
+       * 深色用户每次打开都会先看到一帧白底再跳成深色 —— 那种闪烁很刺眼。
+       * 所以这段必须内联、必须在 <head> 里，不能等任何外部资源。
+       *
+       * 存储键与取值必须与 src/app/themeStore.ts 完全一致；
+       * src/test/theme.test.ts 会逐字比对，改一边不改另一边会让测试红。
+       */
+      ;(function () {
+        try {
+          var saved = localStorage.getItem('inspiration-todo/theme')
+          var mode = saved === 'light' || saved === 'dark' ? saved : 'system'
+          var dark =
+            mode === 'dark' ||
+            (mode === 'system' &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches)
+          document.documentElement.classList.toggle('dark', dark)
+        } catch (error) {
+          // 隐私模式下 localStorage 会直接抛错。读不出来就按浅色走，
+          // 绝不能让一段主题脚本把整个应用拦在门外。
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

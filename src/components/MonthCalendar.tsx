@@ -102,7 +102,7 @@ export function MonthCalendar({
               <span
                 className={`flex h-[26px] w-[26px] items-center justify-center rounded-full text-[13px] ${
                   selected
-                    ? 'bg-idea font-medium text-white'
+                    ? 'bg-idea font-medium text-on-idea'
                     : isToday
                       ? 'font-medium text-idea'
                       : 'text-ink-soft'

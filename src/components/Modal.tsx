@@ -30,7 +30,7 @@ export function Modal({ open, onClose, title, children, footer, widthClass = 'md
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center md:items-center">
       <div
-        className="animate-fade-in absolute inset-0 bg-[rgba(28,28,30,0.28)]"
+        className="animate-fade-in absolute inset-0 bg-scrim"
         onClick={onClose}
         aria-hidden
       />

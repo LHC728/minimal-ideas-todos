@@ -16,6 +16,7 @@ import {
 import { saveCloudflareSession } from '../cloud/cloudflareSession'
 import { CloudRequestError } from '../cloud/cloudflareClient'
 import { resetSupabaseClient } from '../cloud/supabaseClient'
+import { THEME_OPTIONS, themeActions, useThemeMode } from '../app/themeStore'
 import { formatChineseDateTime } from '../utils/time'
 import { uiActions } from '../app/uiStore'
 import { Modal } from './Modal'
@@ -45,6 +46,7 @@ export function SettingsSheet({ open, userId }: SettingsSheetProps) {
   const status = useSyncStatus()
   const pending = usePendingCount(userId)
   const records = useAllRecords(userId)
+  const themeMode = useThemeMode()
 
   // 每次打开由调用方通过 key 重新挂载，表单初值直接来自本机配置
   const stored = readCloudConfig()
@@ -150,6 +152,31 @@ export function SettingsSheet({ open, userId }: SettingsSheetProps) {
             退出登录
           </button>
         ) : null}
+      </section>
+
+      <section className="mb-6">
+        <h3 className="text-[12.5px] font-medium text-ink-soft">外观</h3>
+        <div className="mt-2.5 flex gap-2">
+          {THEME_OPTIONS.map((item) => (
+            <button
+              key={item.value}
+              type="button"
+              onClick={() => themeActions.setMode(item.value)}
+              aria-pressed={themeMode === item.value}
+              data-testid={`settings-theme-${item.value}`}
+              className={`tap tap-active h-9 flex-1 rounded-xl border text-[13px] ${
+                themeMode === item.value
+                  ? 'border-idea/40 bg-idea-soft text-idea'
+                  : 'border-line text-ink-soft'
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 text-[12px] leading-5 text-ink-soft">
+          只影响这台设备的显示，不影响记录本身。
+        </p>
       </section>
 
       <section className="mb-6">
@@ -268,7 +295,7 @@ export function SettingsSheet({ open, userId }: SettingsSheetProps) {
               type="button"
               disabled={busy}
               onClick={() => void handleSaveCloud()}
-              className="tap tap-active mt-2.5 h-10 rounded-xl bg-idea px-4 text-[14px] font-medium text-white disabled:opacity-50"
+              className="tap tap-active mt-2.5 h-10 rounded-xl bg-idea px-4 text-[14px] font-medium text-on-idea disabled:opacity-50"
             >
               {saved ? '已保存，正在重载…' : busy ? '正在验证…' : '保存连接'}
             </button>

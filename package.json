@@ -14,6 +14,7 @@
     "test:e2e": "npm run build && playwright test",
     "verify": "tsc -b && oxlint --deny-warnings && vitest run",
     "check:base": "node scripts/check-base.mjs",
+    "check:contrast": "node scripts/check-contrast.mjs",
     "check:pwa": "node scripts/check-installable.mjs",
     "check:sync": "node scripts/check-sync.mjs",
     "check:app-sync": "node scripts/check-app-sync.mjs",

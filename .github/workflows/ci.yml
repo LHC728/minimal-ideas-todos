@@ -47,6 +47,12 @@ jobs:
       - name: Lint
         run: npx oxlint --deny-warnings
 
+      # 配色对比度是设计规范里的**硬规则**（承载信息的文字 ≥ 4.5:1）。
+      # 十六进制看不出对比度，靠眼睛看必翻车 —— 上一版 idea 实际只有 3.11:1
+      # 而文档里写着 4.6:1。这里让它变成机器守的约束。
+      - name: 配色对比度
+        run: node scripts/check-contrast.mjs
+
       - name: 单元测试
         run: npx vitest run --reporter=dot
 
