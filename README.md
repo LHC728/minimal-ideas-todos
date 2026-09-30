@@ -44,9 +44,9 @@ npm run preview    # 预览构建产物
 src/
   app/          router / AppShell / uiStore / navItems
   pages/        HomePage  IdeasPage  CalendarPage  TodosPage  LoginPage
-  components/   QuickCapture RecordRow RecordDetail TodoCheckbox DateGroup
-                MonthCalendar BottomNav DesktopSidebar SyncIndicator
-                ConflictDialog SearchPanel SettingsSheet Modal Toaster
+  components/   QuickCapture RecordRow RecordNode CompletedTodoRow RecordDetail
+                TodoCheckbox DateGroup MonthCalendar BottomNav DesktopSidebar
+                SyncIndicator ConflictDialog SearchPanel SettingsSheet Modal Toaster
   domain/       record.ts（Record 领域模型）  mutation.ts（同步单元）
   db/           db.ts  recordRepository.ts  outboxRepository.ts
   sync/         SyncEngine PullService ReconcileService PushService
@@ -84,6 +84,12 @@ React 页面不直接调用 Supabase。
 | 灵感 | 只显示灵感 | `type = idea AND deleted_at = null` |
 | 待办 | 现在还有什么没做 | `type = todo AND completed_at = null AND deleted_at = null` |
 | 日历 | 我在某一天想到了什么 | 按 `created_local_date` 归档 |
+
+待办页底部另有一块默认折叠的「已完成」区，按 `completed_at` 倒序。
+它不是归档（归档归首页时间线管），而是一块**后悔药** ——
+打勾这个动作太轻，手滑一下那条就从列表里没了，所以任何时候都能从那里撤销。
+
+导航顺序：首页 / 灵感 / 待办 / 日历。
 
 **时间贯穿整个 APP**：首页 / 灵感 / 待办显示 `HH:mm` 与日期分组，
 详情显示 `YYYY年MM月DD日 HH:mm`，日历通过 `created_local_date` 查询。
@@ -183,8 +189,8 @@ npm run build
 ## 测试
 
 ```bash
-npm test          # Vitest：59 项单元 / 集成测试
-npm run test:e2e  # Playwright：22 项 E2E（桌面 11 + 手机 11）
+npm test          # Vitest：62 项单元 / 集成测试
+npm run test:e2e  # Playwright：24 项 E2E（桌面 12 + 手机 12）
 ```
 
 E2E 跑的是构建产物，所以要先构建：
@@ -262,3 +268,11 @@ V1 不做计划时间：`scheduled_at` 留给未来，且绝不会复用 `create
 
 界面可以朴素，但绝不能丢记录、重复创建、静默覆盖、改变创建时间、
 让删除记录复活，或让离线时无法写入。
+
+---
+
+## 许可证
+
+[MIT](LICENSE) © 2026 LHC728
+
+可以自由使用、修改、分发，包括用于闭源商业产品，只需保留版权声明。
