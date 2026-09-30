@@ -9,7 +9,7 @@ interface DesktopSidebarProps {
 /**
  * 桌面左侧导航。
  *
- * 灵感与待办带数量角标 —— 桌面有空间，顺手回答「我有多少东西」，
+ * 「灵感」与「待办」带数量角标 —— 桌面有空间，顺手回答「我有多少东西」，
  * 不用点进去才知道。首页与日历不带（一个回答时间、一个回答某一天）。
  */
 export function DesktopSidebar({ userId }: DesktopSidebarProps) {
@@ -28,7 +28,7 @@ export function DesktopSidebar({ userId }: DesktopSidebarProps) {
       data-testid="main-nav"
     >
       <div className="safe-top sticky top-0 flex h-screen flex-col px-3 py-5">
-        <div className="mb-5 px-2 text-[13px] font-medium tracking-wide text-ink">灵感与待办</div>
+        <div className="mb-5 px-2 text-[15px] font-medium tracking-[0.08em] text-ink">一刻</div>
 
         <ul className="flex flex-col gap-1">
           {NAV_ITEMS.map((item) => {

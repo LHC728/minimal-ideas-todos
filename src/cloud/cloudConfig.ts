@@ -5,6 +5,10 @@
  * 也可以在「设置」里粘贴，保存在本机 localStorage，避免必须重新构建。
  */
 
+/**
+ * ⚠️ 存储键，不是显示名 —— 改了会丢掉用户已填好的云端配置。
+ * 产品名请改 index.html / manifest。
+ */
 const STORAGE_KEY = 'inspiration-todo/cloud-config'
 
 export interface CloudConfig {

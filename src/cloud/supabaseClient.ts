@@ -18,6 +18,8 @@ export function getSupabaseClient(): SupabaseClient | null {
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: true,
+      // ⚠️ 存储键，不是显示名 —— 改了会把已登录用户踢下线。
+      // 产品名请改 index.html / manifest。
       storageKey: 'inspiration-todo/auth',
     },
   })

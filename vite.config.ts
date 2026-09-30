@@ -3,7 +3,7 @@ import tailwindcss from '@tailwindcss/vite'
 import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
-// 极简灵感与待办 APP — 构建配置
+// 一刻 — 构建配置
 export default defineConfig({
   plugins: [
     react(),
@@ -17,15 +17,15 @@ export default defineConfig({
         'icons/maskable-512.png',
       ],
       manifest: {
-        name: '灵感与待办',
-        short_name: '灵感',
-        description: '极简、Local First 的灵感 + 待办 + 时间线工具',
+        name: '一刻',
+        short_name: '一刻',
+        description: '想到的那一刻，就记下来。极简、本地优先的灵感 + 待办 + 时间线工具',
         lang: 'zh-CN',
         start_url: '/',
         scope: '/',
         display: 'standalone',
-        background_color: '#FCFCFB',
-        theme_color: '#FCFCFB',
+        background_color: '#FAF9F7',
+        theme_color: '#FAF9F7',
         icons: [
           { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
           { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },

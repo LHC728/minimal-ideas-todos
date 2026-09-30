@@ -44,8 +44,8 @@ export function LoginPage() {
   return (
     <div className="flex min-h-screen items-center justify-center px-5">
       <div className="w-full max-w-[360px]">
-        <h1 className="text-[19px] font-medium text-ink">灵感与待办</h1>
-        <p className="mt-1.5 text-[13.5px] leading-6 text-ink-soft">
+        <h1 className="text-[20px] font-medium tracking-[0.06em] text-ink">一刻</h1>
+        <p className="mt-1.5 text-[13px] leading-6 text-ink-soft">
           登录后手机和电脑会自动同步。
           <br />
           记录永远先保存在本机，断网也能用。

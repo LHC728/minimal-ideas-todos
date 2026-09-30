@@ -28,6 +28,13 @@ export interface MetaEntry {
   value: unknown
 }
 
+/**
+ * IndexedDB 数据库名。
+ *
+ * ⚠️ 不要因为改产品名而改这个字符串 —— 它是**存储键**，不是显示名。
+ * 一旦改动，浏览器会认为这是一个全新的空库，用户已有的全部记录都会「消失」
+ * （数据其实还在磁盘上，但对 APP 不可见）。产品名请改 index.html / manifest。
+ */
 export const DB_NAME = 'inspiration-todo'
 
 export class AppDatabase extends Dexie {
