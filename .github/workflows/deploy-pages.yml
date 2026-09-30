@@ -1,0 +1,88 @@
+# 一刻 —— 部署到 GitHub Pages
+#
+# 设计要点：不在这个 workflow 里重复跑验证，而是**等 CI 全绿之后再部署**。
+# 理由：ci.yml 已经跑完 类型检查 / Lint / 单测 / 构建 / E2E，
+# 再跑一遍既浪费额度，又会出现「部署已经完成、E2E 才失败」的时间差。
+# 用 workflow_run 触发，部署的就是 CI 刚刚完整验证过的那一个提交。
+#
+# 路径说明：GitHub Pages 的站点地址是 https://<user>.github.io/<repo>/，
+# 属于子路径，所以构建时必须把 base 设成 /yike/，
+# 否则 index.html 与 manifest 里的绝对路径会指向域名根，线上直接白屏。
+
+name: Deploy to GitHub Pages
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  # 允许手动重跑（例如 Pages 刚开启、或想重新发布一次）
+  workflow_dispatch:
+
+# 部署不能并发：同一时间只允许一个 Pages 发布在跑。
+# cancel-in-progress 必须为 false —— 中断发布可能留下半截产物。
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: 构建 Pages 产物
+    # 只有 CI 成功才部署；手动触发时无条件执行
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # workflow_run 默认检出默认分支的最新提交，那是错的 ——
+          # 必须显式检出「刚刚那次 CI 跑过的那个提交」。
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 构建（子路径 base）
+        run: npm run build
+        env:
+          VITE_BASE: /yike/
+
+      # 本地 preview 的 base 恰好也是 '/'，所以「漏了 base」这种错误
+      # 在本地永远看不出来，只有部署后才白屏。这里补一道门禁。
+      - name: 校验产物路径与部署基路径一致
+        run: node scripts/check-base.mjs /yike/
+
+      - name: 配置 Pages
+        uses: actions/configure-pages@v6
+
+      - name: 上传产物
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist
+
+  deploy:
+    name: 发布
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    # job 级 permissions 会覆盖 workflow 级，所以这里要重新声明
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - name: 发布到 GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

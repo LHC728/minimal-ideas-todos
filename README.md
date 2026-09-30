@@ -32,6 +32,9 @@ npm run verify     # 一键门禁：类型 + Lint + 单元测试
 > `npm run setup` 只是把 git 的 `core.hooksPath` 指向仓库内的 `.githooks/`，
 > 不安装任何依赖。不跑也不影响开发，只是提交前不会自动检查。
 
+想装到手机或 Linux 桌面上用？见 **[部署与安装](#部署与安装)** ——
+这一步有个硬性前提，不看会白折腾。
+
 ---
 
 ## 技术栈
@@ -65,6 +68,10 @@ src/
   auth/         AuthService
   hooks/        useRecords  useSyncStatus  useMediaQuery
   utils/        time  timezone  id
+scripts/
+  gen-icons.mjs          生成 PWA 图标（手写 PNG 编码）
+  check-base.mjs         校验构建产物路径与部署基路径一致
+  check-installable.mjs  实测某个地址能否被安装为 PWA（CDP 权威判据）
 ```
 
 依赖方向（严格单向）：
@@ -253,6 +260,7 @@ npm run test:e2e   # 终端 B
 | 提交前 | `.githooks/pre-commit` | `npm run verify`（tsc + oxlint + vitest） |
 | 提交信息 | `.githooks/commit-msg` | Conventional Commits 格式 |
 | CI | `.github/workflows/ci.yml` | 静态门禁 → 单元测试 → 构建 + E2E |
+| 发布 | `.github/workflows/deploy-pages.yml` | 等 CI 全绿 → 子路径构建 → 校验产物路径 → 发布 |
 
 当前基线：**tsc 0 错误 / oxlint 0 warning（222 条规则）/ 71 项单测全绿**。
 
@@ -263,18 +271,110 @@ npm run test:e2e   # 终端 B
 
 ---
 
-## PWA
+## 部署与安装
+
+### 为什么必须先部署
+
+「装到手机上」有个硬性前提：**浏览器只允许在 HTTPS 或 localhost 下安装 PWA**。
+
+本机跑 `npm run preview` 是 `http://127.0.0.1:4173`，在你自己电脑上算安全上下文；
+但手机连过来是 `http://192.168.x.x:4173` —— **不是安全上下文，装不了**。
+所以要先把它放到一个真实网址上。功能上局域网访问是能用的，只是没有「安装」入口。
+
+### 部署到 GitHub Pages
+
+一次性设置：
+
+1. 仓库 **Settings → Pages → Source** 选 **GitHub Actions**
+2. push 到 `main`，等 CI 绿、Deploy 绿
+
+网址：**https://lhc728.github.io/yike/**
+
+之后每次 push 到 `main` 都会自动重新发布，不需要手动操作。
+
+> 部署 workflow（`.github/workflows/deploy-pages.yml`）是**等 CI 全绿之后才触发**的
+> （用 `workflow_run` 监听 CI 的完成事件），所以线上永远只会是
+> 「类型检查 / Lint / 单测 / 构建 / E2E 全过」的那一个提交。
+> 它也会检出那次 CI 跑过的**确切提交**，而不是默认分支的最新提交。
+
+### 荣耀手机上安装
+
+1. 用 **Chrome** 打开 https://lhc728.github.io/yike/
+2. 先随便记一条，确认能用
+3. 浏览器菜单 → **添加到主屏幕** / **安装应用**
+4. 主屏上出现「一刻」图标，点开是全屏窗口，看不出是网页
+5. 断网试一下 —— 应该照样能记、能看
+
+**建议用 Chrome 而不是系统自带浏览器。** 荣耀的 MagicOS 基于安卓，
+PWA 支持本身没问题，但部分机型的自带浏览器会把「添加到主屏幕」藏在很深的菜单里，
+或者在「设置 → 应用 → 特殊访问权限」里做限制。菜单里找不到时：
+
+- 换 Chrome / Edge 再试一次（最有效）
+- 或直接当普通网页用 —— 功能完全一样，只是没有独立图标、需要每次打开浏览器
+
+装成 PWA 之后的数据仍然存在手机本机（IndexedDB）。
+**如果换浏览器或清了浏览器数据，本机记录会丢** —— 想跨设备/防丢，去
+[连接云端](#连接云端可选) 把同步打开。
+
+### Linux 上使用
+
+浏览器打开同一个网址即可，功能完整。
+
+想让它像桌面软件那样用（独立窗口 + 应用菜单里有图标 + 离线可用）：
+
+- **Chrome / Edge**：地址栏右侧会出现「安装」图标，点它；
+  或菜单 → 「安装一刻」/「作为应用安装」
+- **Firefox**：Linux 版 Firefox 不支持安装 PWA，只能用标签页
+
+装完之后它就是应用菜单里的一个普通程序，独立窗口、没有地址栏。
+
+在 Linux 上开发也完全可以（CI 就跑在 `ubuntu-latest` 上）：
+`nvm use` 会读仓库里的 `.nvmrc` 装好 Node 22，然后照「快速开始」走。
+
+### 怎么确认线上真的能装
+
+`scripts/check-base.mjs` 只保证路径没写错，**不能保证浏览器愿意把它当应用装**。
+权威判据是 CDP 的 `Page.getInstallabilityErrors`：
+
+```bash
+node scripts/check-installable.mjs https://lhc728.github.io/yike/
+```
+
+它会逐项检查：安全上下文 → manifest 可读且字段完整 → 每个图标真的取得到
+→ `start_url` / `scope` 与页面在同一路径下 → Service Worker 已激活并接管页面
+→ 最后用 CDP 给出权威结论。全部通过才会打印「可以被安装为 PWA」。
+
+### 本地构建子路径的坑（Windows / Git Bash）
+
+GitHub Pages 是子路径（`/yike/`），构建时要传 base：
+
+```bash
+VITE_BASE=/yike/ npm run build
+```
+
+但在 **Windows 的 Git Bash** 里，这条命令会被 MSYS 改写 ——
+`/yike/` 被当成 Unix 路径转成 `C:/Users/.../yike/`，**构建照样成功，产物却全是坏路径**。
+本地要这样跑：
+
+```bash
+MSYS_NO_PATHCONV=1 VITE_BASE=/yike/ npm run build
+MSYS_NO_PATHCONV=1 npm run check:base -- /yike/
+```
+
+Linux / macOS / CI 上没有这个问题。
+`vite.config.ts` 和 `check-base.mjs` 都会**拦截被改写的值并直接报错**，
+不会静默产出坏产物。
+
+### PWA 技术细节
 
 构建产物包含 `manifest.webmanifest`、`sw.js`、图标与离线 app shell。
 
-- 荣耀 / Android 手机浏览器可正常使用，可「添加到桌面」
-- Windows / Linux 浏览器可正常使用，可安装为 Web App
-- 普通浏览器直接访问仍然完整可用
-
-Service Worker **只缓存 app shell**（HTML / CSS / JS / 图标），
-业务数据一律走 IndexedDB。
-
-图标由 `npm run icons` 生成（纯 Node 手写 PNG 编码，无额外依赖）。
+- Service Worker **只缓存 app shell**（HTML / CSS / JS / 图标），业务数据一律走 IndexedDB
+- manifest 的 `start_url` / `scope` / 图标全部用**相对路径**，
+  所以根路径与子路径部署都正确（写成 `/` 的话子路径部署会指向域名根）
+- 路由用 HashRouter，刷新 / 直接打开链接不会 404
+- 图标由 `npm run icons` 生成（纯 Node 手写 PNG 编码，无额外依赖）
+- `uuidv4()` 有三级兜底，非安全上下文（局域网 HTTP）下也能生成 ID
 
 ---
 

@@ -13,6 +13,8 @@
     "test:watch": "vitest",
     "test:e2e": "npm run build && playwright test",
     "verify": "tsc -b && oxlint --deny-warnings && vitest run",
+    "check:base": "node scripts/check-base.mjs",
+    "check:pwa": "node scripts/check-installable.mjs",
     "setup": "git config core.hooksPath .githooks && echo 已启用 .githooks（pre-commit + commit-msg）",
     "icons": "node scripts/gen-icons.mjs"
   },
