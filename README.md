@@ -401,13 +401,39 @@ Authentication → **URL Configuration**：
 ⚠️ **一定要带上子路径**。本站部署在 GitHub Pages 的 `/yike/` 下，
 只填 `https://lhc728.github.io` 会让邮件里的链接落到站点根目录、直接 404。
 
-#### 4. 让邮件里带上验证码（⚠️ 必须改）
+#### 4. 接一个自己的发信邮箱（**必须**）
 
-Supabase 默认的邮件模板**只有一个链接、没有验证码**，
-而应用里的登录框是让人填 6 位数字的 —— 不改就卡在这一步。
+⚠️ Supabase 自带的邮件服务**不允许编辑模板** —— 页面上会提示
+「Set up custom SMTP to edit templates」。而它的默认模板里
+**只有一个登录链接、没有验证码**，本应用的登录框却是让人填 6 位数字的。
 
-Authentication → **Email Templates**，把 **Magic Link** 和 **Confirm signup**
-两个模板的正文都改成包含 `{{ .Token }}`：
+而且「点邮件里的链接」这条路对**装到主屏的 PWA 也走不通**：
+链接会被系统浏览器打开，登录状态记在浏览器里；PWA 是**独立的存储空间**，
+那边依然是未登录状态。
+
+所以在 **Authentication → Emails → SMTP Settings** 里接一个自己的 SMTP：
+
+| 字段 | 用 QQ 邮箱 | 用 Resend |
+| --- | --- | --- |
+| Host | `smtp.qq.com` | `smtp.resend.com` |
+| Port | `465` | `465` |
+| Username | 你的 QQ 邮箱地址 | `resend` |
+| Password | QQ 邮箱的**授权码**（不是登录密码） | Resend 的 API Key |
+| Sender email | 你的 QQ 邮箱地址 | `onboarding@resend.dev` |
+| Sender name | 一刻 | 一刻 |
+
+> **QQ 邮箱的授权码**：登录 `mail.qq.com` → 设置 → 账户 →
+> 开启「IMAP/SMTP 服务」→ 按提示生成一串授权码，拿它当密码。
+> 163 邮箱同理（Host 用 `smtp.163.com`）。
+>
+> 用 Resend 的话注意：`onboarding@resend.dev` **只能发到 Resend 账号自己的邮箱**，
+> 自己用是够的。好处是额度从「每小时 2 封」提到「每天 100 封」。
+
+配好 SMTP 后模板就能编辑了，接着做下一步。
+
+#### 5. 让邮件里带上验证码
+
+Authentication → **Emails** → 点 **Magic link or OTP**，把 Body 整个换成：
 
 ```html
 <h2>登录一刻</h2>
@@ -415,11 +441,9 @@ Authentication → **Email Templates**，把 **Magic Link** 和 **Confirm signup
 <p>也可以直接点链接登录：<a href="{{ .ConfirmationURL }}">打开一刻</a></p>
 ```
 
-> 内置邮件服务**每小时只能发 2 封**，且只能发给项目成员的邮箱。
-> 自己用是够的；不够可以在 Authentication → SMTP Settings 接一个
-> 免费的第三方发信服务（如 Resend）。
+**Confirm signup** 也照样改一遍（新账号第一次登录走的是这个模板）。
 
-#### 5. 配置连接
+#### 6. 配置连接
 
 方式一：构建期环境变量
 
@@ -435,7 +459,7 @@ npm run build
 粘贴 **Project URL** 与 **anon public key**（都在 Project Settings → API 里），
 保存后页面会自动重载。
 
-#### 6. 登录
+#### 7. 登录
 
 重载后会跳到登录页：填邮箱 → 收验证码 → 登录。
 从本机模式首次登录时，**本机已有记录会自动归入该账号**，不会丢失。
