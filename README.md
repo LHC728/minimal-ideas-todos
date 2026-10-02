@@ -366,6 +366,11 @@ npm run check:app-sync -- \
 Region 选 **Southeast Asia (Singapore)** 或 **Northeast Asia (Tokyo)**（离国内近）。
 等 1～2 分钟初始化完成。
 
+> ⚠️ 建项目表单里的两个开关**保持默认勾选**：「**启用数据 API**」和「**自动暴露新表**」。
+> 后者界面上写着「我们建议关闭」，但**本仓库的 SQL 脚本没有手写 `GRANT`**，
+> 靠它给新表授权 —— 关掉的话应用会报 `permission denied for table records`，
+> 而且很难往这上面想。「启用自动 RLS」勾不勾都行（脚本里已经自己开了）。
+
 #### 2. 建表
 
 在 Supabase 项目的 SQL Editor 中执行：
