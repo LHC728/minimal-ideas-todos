@@ -53,6 +53,24 @@ function userFromSession(session: Session | null): AuthUser | null {
   return { id: user.id, email: user.email ?? null }
 }
 
+/**
+ * 应用所在的完整地址（**含子路径**）。
+ *
+ * ⚠️ 不能用 `location.origin` —— 线上部署在 GitHub Pages 的子路径 `/yike/` 下，
+ * origin 只有 `https://lhc728.github.io`，而应用实际在 `/yike/`。
+ * 邮件里的登录链接会落到站点根目录，直接 404。
+ * 必须把 Vite 的 `BASE_URL` 拼进去（本地为 `/`，线上为 `/yike/`）。
+ */
+function appBaseUrl(): string | undefined {
+  const origin = globalThis.location?.origin
+  if (!origin) return undefined
+  try {
+    return new URL(import.meta.env?.BASE_URL ?? '/', origin).toString()
+  } catch {
+    return origin
+  }
+}
+
 class AuthService {
   private listeners = new Set<() => void>()
   private snapshot: AuthState = {
@@ -265,11 +283,13 @@ class AuthService {
   async sendEmailCode(email: string): Promise<void> {
     const client = getSupabaseClient()
     if (!client) throw new Error('cloud_not_configured')
+    // 拿不到地址时干脆不传这个参数 —— 传一个假的相对地址反而会让服务端拒绝
+    const redirectTo = appBaseUrl()
     const { error } = await client.auth.signInWithOtp({
       email: email.trim(),
       options: {
         shouldCreateUser: true,
-        emailRedirectTo: globalThis.location?.origin ?? undefined,
+        ...(redirectTo === undefined ? {} : { emailRedirectTo: redirectTo }),
       },
     })
     if (error) throw new Error(error.message)
