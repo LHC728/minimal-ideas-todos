@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { authService } from '../auth/AuthService'
 import { useAuth } from '../hooks/useSyncStatus'
-import { readCloudConfig } from '../cloud/cloudConfig'
+import { readCloudConfig, saveCloudConfig } from '../cloud/cloudConfig'
+import { saveCloudflareSession } from '../cloud/cloudflareSession'
+import { resetSupabaseClient } from '../cloud/supabaseClient'
 import { CloudRequestError } from '../cloud/cloudflareClient'
 
 /**
@@ -17,6 +19,34 @@ export function LoginPage() {
   const auth = useAuth()
   if (auth.provider === 'cloudflare') return <TokenLogin />
   return <EmailCodeLogin />
+}
+
+/**
+ * 配置填错时的**唯一退路**。
+ *
+ * 没有它就会死锁：`App` 在「已配置云端但未登录」时只渲染登录页，
+ * 而登录页原本没有任何入口能回到本机模式 —— 地址或 key 填错一次，
+ * 用户就再也进不去设置页，也退不回本机模式，只能卸载重装（会丢本机记录）。
+ *
+ * 注意：这里**只清连接配置**，不动 IndexedDB —— 本机记录一条都不会少。
+ */
+function DisconnectLink() {
+  function disconnect(): void {
+    saveCloudConfig(null)
+    saveCloudflareSession(null)
+    resetSupabaseClient()
+    window.location.reload()
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={disconnect}
+      className="tap tap-active mt-5 text-[12.5px] text-ink-soft underline underline-offset-4"
+    >
+      连不上？断开云端连接，先只用本机
+    </button>
+  )
 }
 
 // ---------------------------------------------------------------
@@ -100,6 +130,8 @@ function TokenLogin() {
           访问令牌相当于这个账号的钥匙，别发给别人。
           丢失或泄露时，在服务端删掉它即可立刻作废。
         </p>
+
+        <DisconnectLink />
       </div>
     </div>
   )
@@ -197,6 +229,8 @@ function EmailCodeLogin() {
             重新发送
           </button>
         ) : null}
+
+        <DisconnectLink />
       </div>
     </div>
   )
