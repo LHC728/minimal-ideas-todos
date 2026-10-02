@@ -456,8 +456,15 @@ npm run build
 方式二：运行期在 APP 内填写
 
 打开右上角「设置 → 云端连接」，后端选 **Supabase**，
-粘贴 **Project URL** 与 **anon public key**（都在 Project Settings → API 里），
+粘贴 **Project URL** 与 **API key**（都在 Project Settings → API 里），
 保存后页面会自动重载。
+
+> **用哪个 key**：Supabase 正在把 `anon` key 换成新的 `sb_publishable_...`
+> 格式（旧的 2026 年底前弃用），两个都能用 ——
+> 页面上看到 **Publishable key** 就复制它；看到 legacy 的
+> **anon public**（`eyJ` 开头）也可以。
+> ⚠️ **绝对不要**复制 **secret key / service_role** —— 它绕过 RLS，
+> 拿到就能读改删所有人的数据，只能留在服务端。
 
 #### 7. 登录
 
