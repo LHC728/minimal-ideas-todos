@@ -353,10 +353,18 @@ npm run check:app-sync -- \
 
 > **国内用户推荐这个**：`supabase.co` 在国内可直达，不用买域名、不用开 VPN。
 
-#### 1. 建项目
+#### 1. 建组织，再建项目
 
-在 [supabase.com](https://supabase.com) 注册，新建一个项目。
-区域（Region）选**新加坡**或**东京**，离国内近。等 1～2 分钟初始化完成。
+在 [supabase.com](https://supabase.com) 注册。注册完会停在「你的组织」页面 ——
+**Supabase 必须先有组织才能建项目**，第一次用容易卡在这一步：
+
+1. 点「**新组织**」（New organization）
+2. Name 随便填；Type 选 **Personal**；Plan 选 **Free**
+3. 创建完回到 Dashboard，才会出现「**New project**」
+
+建项目时：Name 随便填，Database Password 设一个并**记下来**，
+Region 选 **Southeast Asia (Singapore)** 或 **Northeast Asia (Tokyo)**（离国内近）。
+等 1～2 分钟初始化完成。
 
 #### 2. 建表
 
