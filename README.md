@@ -385,6 +385,12 @@ supabase/migrations/0001_init.sql
 - 用户只能 `SELECT` / `INSERT` / `UPDATE` 自己的数据（`user_id = auth.uid()`）
 - **故意不创建 DELETE 策略** → 物理删除在数据库层面被彻底禁止
 
+> Supabase 会弹一个「**检测到潜在问题 / 破坏性操作**」的确认框 —— **点「运行查询」**。
+> 脚本里有几条 `drop ... if exists`（先删后建，为了让脚本可以重复运行），
+> 检测器看到 `drop` 就一律提醒。全新项目里那些对象本来就不存在，
+> `if exists` 会直接跳过，**什么都不会删**；脚本也只碰它自己创建的东西，
+> 不涉及 Supabase 的系统表。
+
 #### 3. 配好登录跳转地址（⚠️ 漏了就登录不了）
 
 Authentication → **URL Configuration**：
