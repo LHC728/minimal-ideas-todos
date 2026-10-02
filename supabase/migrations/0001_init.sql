@@ -229,5 +229,24 @@ create policy applied_mutations_insert_own on public.applied_mutations
 
 -- ---------------------------------------------------------------
 -- Realtime（§54）：只作为加速器
+--
+-- ⚠️ 这里必须写成幂等的。
+-- 建项目时如果勾着「自动暴露新表」，Supabase **已经**把这张表加进
+-- publication 了，再 add 一次会报
+--   42710: relation "records" is already member of publication "supabase_realtime"
+-- 更糟的是：Supabase SQL Editor 把整个脚本当一批执行，一条报错会让
+-- **前面已经建好的表一起回滚**，看起来像「建表失败」，很难往这里想。
 -- ---------------------------------------------------------------
-alter publication supabase_realtime add table public.records;
+do $$
+begin
+  if not exists (
+    select 1
+      from pg_publication_tables
+     where pubname = 'supabase_realtime'
+       and schemaname = 'public'
+       and tablename = 'records'
+  ) then
+    alter publication supabase_realtime add table public.records;
+  end if;
+end
+$$;
