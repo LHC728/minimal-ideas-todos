@@ -61,7 +61,8 @@ src/
   app/          router / AppShell / uiStore / navItems / themeStore（三态主题）
   pages/        HomePage  IdeasPage  CalendarPage  TodosPage  LoginPage
   components/   QuickCapture RecordRow RecordNode CompletedTodoRow RecordDetail
-                ProjectModule ProjectEditor ProjectProgress（大事模块 / 编辑器 / 进度条）
+                ProjectModule ProjectEditor ProjectProgress ProjectLogs
+                （大事模块 / 编辑器 / 进度条 / 逐条进展）
                 TodoCheckbox DateGroup MonthCalendar BottomNav DesktopSidebar
                 SyncIndicator ConflictDialog SearchPanel SettingsSheet Modal Toaster
                 ErrorBoundary
@@ -77,7 +78,9 @@ src/
   utils/        time  timezone  id
 worker/         Cloudflare Workers 后端（可选，不用就不部署）
   schema.sql    D1 建表 + 把产品红线写成触发器的脚本（⚠️ 只对全新库有效）
-  migrations/   增量迁移；0002 是「大事」要的那次（必须重建 records 表）
+  migrations/   增量迁移；0002 是「大事」、0003 是「进展」要的那两次
+                （都必须重建 records 表）
+    __fixtures__/  各次迁移**之前**那份 schema 的冻结副本（历史事实，不许改）
   src/core.ts   鉴权与「原子应用一次 Mutation」（纯逻辑，好测）
   src/index.ts  HTTP 层：CORS / 路由 / 请求体校验
   wrangler.toml database_id 由 npm run cloudflare:setup 回填
@@ -86,10 +89,10 @@ scripts/
   check-base.mjs          校验构建产物路径与部署基路径一致
   check-contrast.mjs      从 index.css 解析真实令牌算 WCAG 对比度（浅色 + 深色）
   check-installable.mjs   实测某个地址能否被安装为 PWA（CDP 权威判据）
-  check-sync.mjs          对着真实后端跑一遍同步接口（幂等/并发/软删除）
+  check-sync.mjs          对着真实后端跑一遍同步接口（幂等/并发/软删除/进展）
   check-app-sync.mjs      真浏览器走真界面 → 确认真落到线上数据库（双向）
   cloudflare-setup.mjs    一键部署 Cloudflare 同步后端（幂等，含自测）
-  verify-d1-migration.mjs 在真实 SQLite 上验 0002 迁移（CI 里由 vitest 跑同一套）
+  verify-d1-migration.mjs 在真实 SQLite 上验迁移（CI 里由 vitest 跑同一套）
 ```
 
 依赖方向（严格单向）：
@@ -115,16 +118,17 @@ React 页面不直接调用任何后端。`cloud/cloudProvider.ts` 是唯一的�
 灵感 = Record(type = "idea")
 待办 = Record(type = "todo")
 大事 = Record(type = "project")
+进展 = Record(type = "log")        ← 挂在某件大事下（parent_id）
 ```
 
 四个页面只是对同一份数据的不同观察方式：
 
 | 页面 | 语义 | 过滤条件 |
 | --- | --- | --- |
-| 首页 | 我什么时候记下了什么（时间线） | `deleted_at = null` |
+| 首页 | 我什么时候记下了什么（时间线） | `deleted_at = null AND type != log` |
 | 灵感 | 只显示灵感 | `type = idea AND deleted_at = null` |
 | 待办 | 现在还有什么没做 | `type = todo AND completed_at = null AND deleted_at = null` |
-| 日历 | 我在某一天想到了什么 | 按 `created_local_date` 归档 |
+| 日历 | 我在某一天想到了什么 | 按 `created_local_date` 归档，同样排除 `log` |
 
 导航顺序：首页 / 灵感 / 待办 / 日历。
 
@@ -149,8 +153,8 @@ React 页面不直接调用任何后端。`cloud/cloudProvider.ts` 是唯一的�
 
 | 字段 | 含义 |
 | --- | --- |
-| `progress` | 0–100 的整数，**只有大事有**，默认 0 |
-| `deadline_local_date` | 截止日，纯日期 `YYYY-MM-DD`，可为空 |
+| `progress` | 0–100 的整数，**只有大事和进展有**，大事默认 0 |
+| `deadline_local_date` | 截止日，纯日期 `YYYY-MM-DD`，可为空（只有大事有） |
 
 三个刻意的设计决定：
 
@@ -167,6 +171,37 @@ React 页面不直接调用任何后端。`cloud/cloudProvider.ts` 是唯一的�
 进度与截止日的收敛（`clampProgress` / `clampDeadlineLocalDate`）放在**边界**上，
 两套后端适配器、worker 出口、仓库层都会过一遍 —— 免得界面出现 `width: NaN%`
 或者一个不存在的「13月45日」。
+
+### 进展（log）
+
+进度条只回答「多少」，回答不了「具体卡在哪」。所以大事详情里还有一块
+**进展记录**：一条进展就是 `Record(type = 'log')`，`parent_id` 指向所属大事。
+
+| 字段 | 含义 |
+| --- | --- |
+| `parent_id` | 所属大事的 id，**只有 log 有**；非 log 带它是数据库直接拒绝的 |
+| `progress` | 写下这条时的进度**快照**，可以为空（「没记」和「记了 0%」是两回事） |
+
+已定的几条：
+
+- 写入口只在**大事详情面板**里（进度区下方），不是第五个一级页面
+- **最新在最上** —— 打开详情第一眼要看到「现在到哪了」
+- 显示成 `50% · 限位搞定了`，配「今天 21:30」这种相对时刻
+- 能改能删，删除有常驻撤销（和打勾、删除同一条规矩）
+- 大事模块那一行显示「N 条进展」
+- **不进首页时间线 / 日历 / 搜索**：一屏里塞满「改了个 bug」会把真正的时间线淹掉；
+  而搜到一条「限位搞定了」却看不到它属于哪件大事，是个没有上下文的碎片
+- 父级被软删时进展**不连坐**（各自的 `deleted_at_utc` 独立），
+  撤销「删除大事」之后写过的进展要原样回来
+- `parent_id` 是**不可变**的：进展属于哪件大事是写下来那刻定死的，
+  D1 触发器与 Supabase 的 RPC 都不接受更新它
+
+**为什么不新开一张表**：整个 APP 只有一种核心数据。新开表意味着 outbox、
+推送、拉取、三方合并、软删除、撤销整套都要再抄一遍 —— 五份代码、
+五个新的丢数据点。代价只是 `idea` / `todo` 上多几个恒为 null 的字段，
+以及过滤器要显式排除 `log`（好在都集中在 `src/domain/record.ts` 一处）。
+
+不做：提醒、子任务、看板、给进展打勾。
 
 ### 时间字段互不混用
 
@@ -300,17 +335,23 @@ npm run cloudflare:setup -- --subdomain=名字  # 指定 workers.dev 子域名
 > 事后无法从库里取回明文 —— 请当场复制走。
 > 丢了不要紧，重跑一次 `--token-only` 就会发一个新的（旧的仍然有效）。
 
-#### 已经部署过？升级到「大事」要跑一次迁移
+#### 已经部署过？升级到「大事 / 进展」要跑迁移
 
 `worker/schema.sql` 里的 `create table if not exists` 对**已存在的表整段跳过**，
 所以光重新部署 Worker 不会给老库加上新列 —— 老库必须单独跑一次迁移。
+
+| 迁移 | 带来什么 | 为什么必须重建 records 表 |
+| --- | --- | --- |
+| `0002_project_type.sql` | 大事：`progress`、`deadline_local_date` | SQLite 改不了 CHECK 约束，只能重建 |
+| `0003_log_type.sql` | 进展：`parent_id`，类型放宽到四种 | 同上（原来那条大 CHECK 要拆成三条） |
 
 ```bash
 # 1) 先备份（强烈建议，这一步是后悔药）
 npx wrangler d1 export yike-sync --remote --output backup-$(date +%F).sql
 
-# 2) 再迁移
+# 2) 再迁移（没跑过 0002 的从 0002 开始，按顺序来）
 npx wrangler d1 execute yike-sync --remote --file=worker/migrations/0002_project_type.sql
+npx wrangler d1 execute yike-sync --remote --file=worker/migrations/0003_log_type.sql
 
 # 3) 最后重新部署 Worker —— 后端代码也要认识新列
 cd worker && npx wrangler deploy
@@ -321,6 +362,14 @@ cd worker && npx wrangler deploy
 > 但也**同步不过去** —— 本机看着 50%，另一台设备拉下来是 0%。
 > 这种「不报错的失效」比报错难查得多。
 
+> ⚠️ **写新迁移时最容易犯的错：照抄上一份的「搬数据」那一段。**
+> 0002 搬数据时 `progress` 是刚加的新列，只能写 `select null`；
+> 到了 0003，线上已经有大事带着**真实进度**了 —— 照抄 `null` 会把用户
+> 攒下的进度**全部清零，而且一句报错都没有**。
+> 正确的做法是逐列原样搬过去，只有真正的新列才补 `null`。
+> 这一步已由 `src/test/d1Migration.test.ts` 钉住（它会塞一件带进度的大事进去，
+> 迁完必须还在）。
+
 怎么确认迁移真的成功了（对着线上库跑一句）：
 
 ```bash
@@ -329,27 +378,32 @@ npx wrangler d1 execute yike-sync --remote --json --command \
           (select count(*) from sqlite_master where type='trigger') as triggers,
           (select count(*) from sqlite_master where type='index' and tbl_name='records') as indexes,
           (select count(*) from pragma_table_info('records')
-            where name in ('progress','deadline_local_date')) as new_cols"
+            where name in ('progress','deadline_local_date','parent_id')) as new_cols"
 ```
 
-期望：`triggers = 4`、`indexes = 5`、`new_cols = 2`，`records` 与迁移前一致。
+期望：`triggers = 4`、`indexes = 5`、`new_cols = 3`，`records` 与迁移前一致。
 
-这个迁移**必须重建 `records` 表**，因为 SQLite 改不了 CHECK 约束。
+> 这条命令**不要**写成 `select ... union all select ...` 拼很多行 ——
+> D1 对 compound SELECT 的项数有限制，拼多了会报 `too many terms in compound SELECT`。
+
 重建的顺序是：drop 触发器 → rename 留底 → 建新表 → 搬数据 → drop 旧表
 → 重建索引 → 重建触发器。里面任何一步写漏都**不会报错**：
 
 - 索引忘了重建 → 查询悄悄退化成全表扫描，功能看着一切正常
 - 触发器忘了重建 → 「创建时间不可变」「只能软删除」这些红线**直接消失**
 - 列顺序写错 → 数据静默串列（`content` 里装着时间戳）
+- 索引重建**早于** `drop table records_legacy` → `create index if not exists`
+  因重名被静默跳过，于是索引干脆不存在
 
-所以这个迁移有一份**专门的测试**（`src/test/d1Migration.test.ts`），
-在真实 SQLite 上从老 schema + 真实数据跑到新 schema，然后逐项验：
+所以迁移有一份**专门的测试**（`src/test/d1Migration.test.ts`），
+在真实 SQLite 上从 0001 一路跑到 0003，然后逐项验：
 数据一条不少、索引与四个触发器一个不少、红线依然有效、新能力可用，
 最后还要求**迁移结果与全新安装逐列、逐触发器完全一致**。
 
-> 迁移测试的输入是 `worker/migrations/__fixtures__/schema-0001.sql` ——
-> 迁移**之前**那份 schema 的冻结副本。它是历史事实，
-> **永远不要跟着 `worker/schema.sql` 一起改**，否则这个测试会彻底失去意义。
+> 迁移测试的输入是 `worker/migrations/__fixtures__/schema-000N.sql` ——
+> 各次迁移**之前**那份 schema 的冻结副本。它是历史事实，
+> **永远不要跟着 `worker/schema.sql` 一起改**，否则这个测试会彻底失去意义
+> （拿新表结构去测新表结构，永远是绿的）。
 
 #### 产品红线是数据库约束，不是文档里的约定
 
@@ -394,9 +448,11 @@ npm run check:sync -- --url=https://yike-sync.你的子域.workers.dev --token=�
 # 或者走环境变量 YIKE_SYNC_URL / YIKE_SYNC_TOKEN
 ```
 
-17 项，覆盖本地测不出来的那几件事：鉴权与路由、幂等重推、
+28 项，覆盖本地测不出来的那几件事：鉴权与路由、幂等重推、
 **并发新建同一条记录时不能有一方以为成功**、版本冲突不覆盖、软删除后
-Tombstone 仍能被 Pull 到、`createdAtUtc` 全程不变。
+Tombstone 仍能被 Pull 到、`createdAtUtc` 全程不变，以及
+**第四种类型 `log` 与不可变字段 `parentId`**（进展「属于哪件大事」写下来那刻定死，
+update 时 payload 里换一个也不生效）。
 
 其中「并发竞态」那三项就是 `changes()` 判据的回归测试 ——
 **如果它失败，说明线上后端会静默丢数据，必须立刻回滚部署。**
@@ -587,9 +643,9 @@ npm run build
 ## 测试
 
 ```bash
-npm run verify         # 类型检查 + Lint + 214 项单元 / 集成测试
+npm run verify         # 类型检查 + Lint + 307 项单元 / 集成测试
 npm run test           # 只跑 Vitest
-npm run test:e2e       # Playwright：30 项 E2E（桌面 15 + 手机 15）
+npm run test:e2e       # Playwright：40 项 E2E（桌面 20 + 手机 20）
 npm run check:contrast # 配色对比度（WCAG AA，浅色 + 深色）
 ```
 
@@ -643,15 +699,21 @@ npm run test:e2e   # 终端 B
 `merge.test.ts` 的「两端都改进度 → 冲突且退回 base，**不做取较大值**」、
 `time.test.ts` 的「倒计时按日历天算，跨月跨年闰年都对，畸形输入不许产出 NaN 天」。
 
+进展（`log`）同样单独钉了一组：`local.test.ts` 的「离线也能写进展 / 进展不算时间线 /
+`parentId` 空白串归一为 null / 非 log 类型带 parentId 被丢弃」、
+`merge.test.ts` 的「`parentId` 跟随 base、不进 `MergeField`（不给用户一个无从判断的选项）」、
+`workerCore.test.ts` 的「`parent_id` 更新路径改不动 / 非 log 带 parentId 落库为 null」、
+`time.test.ts` 的 `formatRelativeStamp`（今天 / 昨天 / 前天 / 更早的月日）。
+
 ### 同步后端（Cloudflare）的测试
 
 | 文件 | 测什么 | 数量 |
 | --- | --- | --- |
-| `workerCore.test.ts` | 鉴权 / 幂等 / 版本冲突 / 创建时间不可变 / 跨账号隔离 / 竞态 / 大事字段 | 41 |
+| `workerCore.test.ts` | 鉴权 / 幂等 / 版本冲突 / 创建时间不可变 / 跨账号隔离 / 竞态 / 大事字段 / **进展与 `parent_id` 不可变** | 54 |
 | `workerHttp.test.ts` | 401 / 400 / 404 / CORS / 跨域 / **出错绝不返回成功** | 38 |
 | `workerSchema.test.ts` | 触发器是否真在拦、两套后端表结构是否逐列一致 | 18 |
-| `d1Migration.test.ts` | **0002 迁移必须重建 records 表**：数据不丢不串、索引与四个触发器一个不少、红线仍有效、迁移结果 == 全新安装 | 15 |
-| `cloudflareAdapter.test.ts` | 字段归一、状态透传、**失败不装成功** | 36 |
+| `d1Migration.test.ts` | **0001 → 0002 → 0003 全链迁移**：数据不丢不串、大事的进度不被清零、索引与四个触发器一个不少、红线仍有效、迁移结果 == 全新安装 | 23 |
+| `cloudflareAdapter.test.ts` | 字段归一、状态透传、**失败不装成功** | 37 |
 
 **这些测试跑在真实 SQLite 上**（Node 22 内置的 `node:sqlite`，见
 `src/test/sqliteD1.ts`），并且会加载 `worker/schema.sql` 的触发器。
@@ -695,7 +757,7 @@ SQLite 就是 D1 的引擎，所以 `on conflict do nothing`、`insert ... selec
 | CI | `.github/workflows/ci.yml` | 静态门禁 + 对比度 → 单元测试 → 构建 + E2E |
 | 发布 | `.github/workflows/deploy-pages.yml` | 等 CI 全绿 → 子路径构建 → 校验产物路径 → 发布 |
 
-当前基线：**tsc 0 错误 / oxlint 0 warning（222 条规则）/ 268 项单测 + 34 项 E2E 全绿**。
+当前基线：**tsc 0 错误 / oxlint 0 warning（222 条规则）/ 307 项单测 + 40 项 E2E 全绿**。
 
 - 📋 **[代码审查标准与流程](docs/代码审查标准与流程.md)** —— 优先级判据、
   高风险区清单、三级门禁、测试分层策略、审查清单、例外处理

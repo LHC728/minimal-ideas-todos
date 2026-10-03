@@ -10,6 +10,7 @@
  *     · 并发竞态：两台设备同时新建同一条记录，**不能有一方以为成功**
  *     · 乐观并发：版本对不上时必须报冲突，而不是覆盖
  *     · 软删除：删除写的是 deleted_at_utc，记录本身还在（Tombstone 能同步）
+ *     · 第四种类型 log 与不可变字段 parentId（0003 迁移之后才有的）
  *   这和 scripts/check-installable.mjs 是同一类东西 —— 只在真环境里才有意义。
  *
  * 用法（地址和令牌从参数或环境变量读，脚本本身不含任何密钥）：
@@ -275,11 +276,144 @@ check(
 )
 
 // ---------------------------------------------------------------
-section('5. 清理本次测试记录')
+section('5. 进展（log）与 parentId —— 大事详情里的逐条记录')
+
+// 这一组验的是 0003 迁移上线之后，**部署出去的那份 Worker** 真的认这四种类型。
+// 本地单测跑在 Node 的 SQLite 上，证明不了线上那份也对，而这里正是
+// 「本地测不出来的一层」。
+//
+// 顺带说明为什么 `type` 要在展开之后写：createPayload() 里默认是 'idea'，
+// 后面的键覆盖前面的，这样读起来比另写一个 helper 更直白。
+const parentProject = idFor('log-parent')
+const parentCreated = await call('/api/sync/mutate', {
+  body: {
+    mutationId: mutationFor('log-parent'),
+    recordId: parentProject,
+    operation: 'create',
+    expectedVersion: null,
+    payload: {
+      ...createPayload('同步自测 · 进展的父级大事'),
+      type: 'project',
+      progress: 20,
+      deadlineLocalDate: '2026-12-31',
+    },
+  },
+})
+check(
+  '大事能带 progress / deadline 新建',
+  parentCreated.body?.record?.progress === 20 &&
+    parentCreated.body?.record?.deadlineLocalDate === '2026-12-31',
+  parentCreated.body?.record,
+)
+
+const logRecord = idFor('log')
+const logCreated = await call('/api/sync/mutate', {
+  body: {
+    mutationId: mutationFor('log'),
+    recordId: logRecord,
+    operation: 'create',
+    expectedVersion: null,
+    payload: {
+      ...createPayload('同步自测 · 一条进展'),
+      type: 'log',
+      parentId: parentProject,
+      progress: 40,
+    },
+  },
+})
+check(
+  'log 类型被接受（0003 之后才有的第四种类型）',
+  logCreated.body?.status === 'applied' && logCreated.body?.record?.type === 'log',
+  logCreated.body,
+)
+check('进展的 parentId 原样写入', logCreated.body?.record?.parentId === parentProject, {
+  got: logCreated.body?.record?.parentId,
+  want: parentProject,
+})
+check('进展的 progress 原样写入（=40）', logCreated.body?.record?.progress === 40, logCreated.body?.record?.progress)
+check('进展不该有截止日', logCreated.body?.record?.deadlineLocalDate === null, logCreated.body?.record?.deadlineLocalDate)
+
+// 不可变字段：更新时 payload 里塞一个**别的** parentId，库里必须纹丝不动。
+// 如果这一项红了，说明触发器 records_created_fields_immutable 没生效，
+// 或者 Worker 的 update 路径错误地把 parent_id 放进了 SET。
+const logUpdated = await call('/api/sync/mutate', {
+  body: {
+    mutationId: mutationFor('log-upd'),
+    recordId: logRecord,
+    operation: 'update',
+    expectedVersion: 1,
+    payload: {
+      content: '同步自测 · 进展改过内容',
+      parentId: idFor('some-other-project'),
+      updatedAtUtc: nowIso(),
+      updatedTimezone: 'Asia/Shanghai',
+    },
+  },
+})
+check('进展的内容能改', logUpdated.body?.record?.content === '同步自测 · 进展改过内容', logUpdated.body?.record?.content)
+check(
+  '⚠️ parentId 不可变：payload 里换一个也不生效',
+  logUpdated.body?.record?.parentId === parentProject,
+  { got: logUpdated.body?.record?.parentId, want: parentProject },
+)
+
+// 「没记进度」和「记了 0%」是两回事 —— 清空必须靠**显式 null**，
+// 因为 Worker 用「键在不在」判断，而不是「值是不是假」。
+const logCleared = await call('/api/sync/mutate', {
+  body: {
+    mutationId: mutationFor('log-clear'),
+    recordId: logRecord,
+    operation: 'update',
+    expectedVersion: 2,
+    payload: { progress: null, updatedAtUtc: nowIso() },
+  },
+})
+check(
+  'progress 传显式 null 才清空（「没记」≠「记了 0%」）',
+  logCleared.body?.record?.progress === null,
+  logCleared.body?.record?.progress,
+)
+
+// 非 log 带 parentId 必须被丢弃，否则会撞上 CHECK（type = 'log' or parent_id is null）。
+// 这条也是「客户端与服务端字段裁决必须一致」的回归点。
+const todoWithParent = idFor('log-todo')
+const todoCreated = await call('/api/sync/mutate', {
+  body: {
+    mutationId: mutationFor('log-todo'),
+    recordId: todoWithParent,
+    operation: 'create',
+    expectedVersion: null,
+    payload: {
+      ...createPayload('同步自测 · 带 parentId 的待办'),
+      type: 'todo',
+      parentId: parentProject,
+      progress: 77,
+    },
+  },
+})
+check('非 log 带 parentId → 落库为 null', todoCreated.body?.record?.parentId === null, todoCreated.body?.record?.parentId)
+check('非 log 带 progress → 落库为 null', todoCreated.body?.record?.progress === null, todoCreated.body?.record?.progress)
+
+// 空白串也要当「没有父级」：空串既不等于 null、又匹配不到任何大事 id，
+// 会让那条进展在所有设备上「挂在一个不存在的大事下」—— 界面表现是凭空消失。
+const logBlankParent = idFor('log-blank')
+const blankParentRes = await call('/api/sync/mutate', {
+  body: {
+    mutationId: mutationFor('log-blank'),
+    recordId: logBlankParent,
+    operation: 'create',
+    expectedVersion: null,
+    payload: { ...createPayload('同步自测 · 空 parentId'), type: 'log', parentId: '   ' },
+  },
+})
+check('parentId 是空白串 → 落库为 null', blankParentRes.body?.record?.parentId === null, blankParentRes.body?.record?.parentId)
+
+// ---------------------------------------------------------------
+section('6. 清理本次测试记录')
 
 // 红线：不做物理删除，所以这里也只软删除。留下的是 Tombstone，
 // 界面上看不见，也不会影响你已有的记录。
-const leftovers = [raceRecord]
+const leftovers = [raceRecord, logRecord, todoWithParent, logBlankParent, parentProject]
 for (const recordId of leftovers) {
   const read = await call(`/api/sync/record?id=${encodeURIComponent(recordId)}`, { method: 'GET' })
   const version = read.body?.record?.version
