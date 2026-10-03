@@ -311,7 +311,28 @@ npx wrangler d1 export yike-sync --remote --output backup-$(date +%F).sql
 
 # 2) 再迁移
 npx wrangler d1 execute yike-sync --remote --file=worker/migrations/0002_project_type.sql
+
+# 3) 最后重新部署 Worker —— 后端代码也要认识新列
+cd worker && npx wrangler deploy
 ```
+
+> ⚠️ **三步都要做。** 只做第 2 步的话，老 Worker 收到带 `progress` 的请求
+> 会**当作没看见**（payload 里多出来的字段被忽略），于是进度不会报错，
+> 但也**同步不过去** —— 本机看着 50%，另一台设备拉下来是 0%。
+> 这种「不报错的失效」比报错难查得多。
+
+怎么确认迁移真的成功了（对着线上库跑一句）：
+
+```bash
+npx wrangler d1 execute yike-sync --remote --json --command \
+  "select (select count(*) from records) as records,
+          (select count(*) from sqlite_master where type='trigger') as triggers,
+          (select count(*) from sqlite_master where type='index' and tbl_name='records') as indexes,
+          (select count(*) from pragma_table_info('records')
+            where name in ('progress','deadline_local_date')) as new_cols"
+```
+
+期望：`triggers = 4`、`indexes = 5`、`new_cols = 2`，`records` 与迁移前一致。
 
 这个迁移**必须重建 `records` 表**，因为 SQLite 改不了 CHECK 约束。
 重建的顺序是：drop 触发器 → rename 留底 → 建新表 → 搬数据 → drop 旧表
