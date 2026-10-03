@@ -522,7 +522,7 @@
 | --- | --- |
 | `tsc -b` | 0 错误 |
 | `oxlint --deny-warnings` | 0 warning（91 文件 / 222 规则） |
-| `vitest run` | **267 项全绿** |
+| `vitest run` | **268 项全绿** |
 | `playwright test` | **34 项全绿**（桌面 17 + 手机 17） |
 | `check:contrast` | **两种主题 44 对全部达标** |
 | `verify-d1-migration.mjs` | **24 项全过**（真实 SQLite 上从老库跑到新库） |

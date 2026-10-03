@@ -695,7 +695,7 @@ SQLite 就是 D1 的引擎，所以 `on conflict do nothing`、`insert ... selec
 | CI | `.github/workflows/ci.yml` | 静态门禁 + 对比度 → 单元测试 → 构建 + E2E |
 | 发布 | `.github/workflows/deploy-pages.yml` | 等 CI 全绿 → 子路径构建 → 校验产物路径 → 发布 |
 
-当前基线：**tsc 0 错误 / oxlint 0 warning（222 条规则）/ 267 项单测 + 34 项 E2E 全绿**。
+当前基线：**tsc 0 错误 / oxlint 0 warning（222 条规则）/ 268 项单测 + 34 项 E2E 全绿**。
 
 - 📋 **[代码审查标准与流程](docs/代码审查标准与流程.md)** —— 优先级判据、
   高风险区清单、三级门禁、测试分层策略、审查清单、例外处理

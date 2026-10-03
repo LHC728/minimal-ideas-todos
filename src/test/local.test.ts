@@ -376,7 +376,7 @@ describe('大事：进度与截止日', () => {
     expect(todo.deadlineLocalDate).toBeNull()
   })
 
-  it('改进度：落库 + 进 outbox（离线也能改）', async () => {
+  it('改进度：落库 + 进 outbox（离线也能改），且 payload 里真的带着 progress', async () => {
     const project = await createRecord({
       userId: USER,
       type: 'project',
@@ -387,6 +387,17 @@ describe('大事：进度与截止日', () => {
 
     const updated = await updateProjectProgress(project.id, 60, '2026-09-30T03:00:00.000Z', TZ)
     expect(updated?.progress).toBe(60)
+
+    // ⚠️ 这一环最容易漏：库里改了、但 mutation 的 payload 没带上 progress 的话，
+    // 推送出去后端收不到，本机看着 60%、另一台设备拉下来是 0%，而且**不报错**。
+    //
+    // 注意这里只剩 1 条 mutation —— 尚未发送的 create 和随后的 update 会被
+    // 压缩成一条（§58），operation 取优先级更高的那个，也就是 create。
+    const pending = await listAllPending(USER)
+    expect(pending).toHaveLength(1)
+    expect(pending[0]?.operation).toBe('create')
+    expect(pending[0]?.payload.progress).toBe(60)
+    expect(pending[0]?.payload.updatedAtUtc).toBe('2026-09-30T03:00:00.000Z')
 
     // 刷新后仍在
     await reopenDevice(device)
@@ -410,7 +421,7 @@ describe('大事：进度与截止日', () => {
     expect(again?.updatedAtUtc).toBe('2026-09-29T16:14:00.000Z') // 没被改
   })
 
-  it('设截止日与清除截止日', async () => {
+  it('设截止日 → 进 outbox payload', async () => {
     const project = await createRecord({
       userId: USER,
       type: 'project',
@@ -422,8 +433,30 @@ describe('大事：进度与截止日', () => {
     const set = await updateDeadline(project.id, '2026-10-15', '2026-09-30T03:00:00.000Z', TZ)
     expect(set?.deadlineLocalDate).toBe('2026-10-15')
 
+    const pending = await listAllPending(USER)
+    expect(pending).toHaveLength(1)
+    expect(pending[0]?.payload.deadlineLocalDate).toBe('2026-10-15')
+  })
+
+  it('清除截止日 → payload 里必须是显式 null，不能是「这个字段没带」', async () => {
+    const project = await createRecord({
+      userId: USER,
+      type: 'project',
+      content: '做一个机械臂',
+      deadlineLocalDate: '2026-10-15',
+      nowUtc: '2026-09-29T16:14:00.000Z',
+      timezone: TZ,
+    })
+
     const cleared = await updateDeadline(project.id, null, '2026-09-30T04:00:00.000Z', TZ)
     expect(cleared?.deadlineLocalDate).toBeNull()
+
+    // 后端把「字段没带」理解成「这一列不改」，所以清除必须显式带 null 出去，
+    // 否则本地清掉了、云端还留着，下一次 Pull 又给拉回来。
+    const pending = await listAllPending(USER)
+    expect(pending).toHaveLength(1)
+    expect('deadlineLocalDate' in (pending[0]?.payload ?? {})).toBe(true)
+    expect(pending[0]?.payload.deadlineLocalDate).toBeNull()
   })
 
   it('对灵感 / 待办调用改进度或改截止日 → 字段一动不动，也不产生多余的 mutation', async () => {
