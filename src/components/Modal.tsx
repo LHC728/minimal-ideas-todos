@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from 'react'
-import { X } from 'lucide-react'
+import { ChevronLeft, X } from 'lucide-react'
 
 interface ModalProps {
   open: boolean
@@ -9,13 +9,29 @@ interface ModalProps {
   footer?: ReactNode
   /** 桌面端最大宽度 */
   widthClass?: string
+  /**
+   * 子页返回。给了就在标题左边多一个返回箭头。
+   * 设为可选，是为了让「设置 → 云端连接」这种二级页不必为此单开一个组件，
+   * 同时不影响已有的一级用法（详情 / 搜索 / 冲突）。
+   */
+  // 显式带上 `| undefined`：`exactOptionalPropertyTypes` 下，调用方写
+  // `onBack={条件 ? fn : undefined}` 才算合法。
+  onBack?: (() => void) | undefined
 }
 
 /**
  * 手机：底部抽屉；桌面：居中弹层。
  * 详情不是硬要求做三栏布局，数据正确优先于桌面布局炫技（§71）。
  */
-export function Modal({ open, onClose, title, children, footer, widthClass = 'md:max-w-lg' }: ModalProps) {
+export function Modal({
+  open,
+  onClose,
+  title,
+  children,
+  footer,
+  widthClass = 'md:max-w-lg',
+  onBack,
+}: ModalProps) {
   useEffect(() => {
     if (!open) return
     const onKey = (event: KeyboardEvent) => {
@@ -44,7 +60,19 @@ export function Modal({ open, onClose, title, children, footer, widthClass = 'md
       >
         {title ? (
           <div className="flex items-center justify-between gap-4 border-b border-line-soft px-5 py-3.5">
-            <h2 className="text-[15px] font-medium text-ink">{title}</h2>
+            <div className="flex min-w-0 items-center gap-0.5">
+              {onBack ? (
+                <button
+                  type="button"
+                  onClick={onBack}
+                  aria-label="返回"
+                  className="tap tap-active -ml-2 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-ink-soft"
+                >
+                  <ChevronLeft size={18} strokeWidth={1.8} />
+                </button>
+              ) : null}
+              <h2 className="truncate text-[15px] font-medium text-ink">{title}</h2>
+            </div>
             <button
               type="button"
               onClick={onClose}
