@@ -10,6 +10,7 @@ import {
   themeStore,
   type ThemeMode,
 } from '../app/themeStore'
+import { DESKTOP_QUERY } from '../hooks/useMediaQuery'
 
 /**
  * 主题这块逻辑很少，但有三处**错了不会报错、只会表现得很怪**的地方，
@@ -166,5 +167,31 @@ describe('index.html 的防闪脚本与主题模块不许漂移', () => {
     const scriptAt = html.indexOf('prefers-color-scheme: dark')
     expect(scriptAt).toBeGreaterThan(-1)
     expect(scriptAt).toBeLessThan(headEnd)
+  })
+})
+
+describe('桌面断点：CSS 的 md: 与 JS 的 DESKTOP_QUERY 不许漂移', () => {
+  // 同一件事的两半，各写一份所以必须钉住：
+  //   CSS 那边管 `md:`（弹层限宽 / 遮罩居中 / Toast 位置 / 底部导航隐藏），
+  //   JS 这边管侧栏与右侧详情面板渲不渲染。
+  // 两边一旦不一致，就会出现「底部导航还在、中间内容却被它挡住」这种
+  // 半吊子形态 —— 不报错，只是某一段宽度区间里的界面没法用。
+  const css = readFileSync(resolve(process.cwd(), 'src/index.css'), 'utf8')
+
+  function cssBreakpointPx(): string | null {
+    // 只认 px：写 rem 会随浏览器字号漂移，跟 JS 那边的 px 对不上
+    return /--breakpoint-md:\s*(\d+)px/.exec(css)?.[1] ?? null
+  }
+
+  it('CSS 里确实覆盖了 Tailwind 默认的 768px', () => {
+    const px = cssBreakpointPx()
+    expect(px).not.toBeNull()
+    // 768px 进三列的话，中间内容区只剩 248px（侧栏 200 + 详情 320 = 520 是死的）
+    expect(Number(px)).toBeGreaterThan(768)
+  })
+
+  it('JS 的断点与 CSS 的 --breakpoint-md 同值', () => {
+    const px = cssBreakpointPx()
+    expect(DESKTOP_QUERY).toBe(`(min-width: ${px}px)`)
   })
 })
