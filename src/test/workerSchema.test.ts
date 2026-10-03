@@ -28,6 +28,10 @@ const pgMigrationSql = readFileSync(
   resolve(process.cwd(), 'supabase/migrations/0002_project_type.sql'),
   'utf8',
 ).toLowerCase()
+const pgMigration3Sql = readFileSync(
+  resolve(process.cwd(), 'supabase/migrations/0003_log_type.sql'),
+  'utf8',
+).toLowerCase()
 
 /** 从 Postgres 建表语句里抠出列名 */
 function pgColumns(table: string): string[] {
@@ -42,14 +46,16 @@ function pgColumns(table: string): string[] {
     .filter((line) => line !== '' && !line.startsWith('--'))
     .map((line) => line.split(/\s+/)[0] ?? '')
 
-  // 0002 之后，真表结构 = 0001 的建表语句 + 后续迁移里的 add column。
-  // 只读 0001 会得出「D1 多出两列」的假警报 —— 而真实原因是迁移。
-  const added = pgMigrationSql.matchAll(
-    new RegExp(`alter table public\\.${table} add column if not exists (\\w+)`, 'g'),
-  )
-  for (const item of added) {
-    const name = item[1]
-    if (name !== undefined && !columns.includes(name)) columns.push(name)
+  // 0002 / 0003 之后，真表结构 = 0001 的建表语句 + 后续每一次迁移里的
+  // add column。只读 0001 会得出「D1 多出几列」的假警报 —— 而真实原因是迁移。
+  for (const migration of [pgMigrationSql, pgMigration3Sql]) {
+    const added = migration.matchAll(
+      new RegExp(`alter table public\\.${table} add column if not exists (\\w+)`, 'g'),
+    )
+    for (const item of added) {
+      const name = item[1]
+      if (name !== undefined && !columns.includes(name)) columns.push(name)
+    }
   }
   return columns
 }
@@ -123,28 +129,37 @@ describe('★ 两套后端的表结构必须一致（否则「可互换」是句
     }
   })
 
-  it('type 允许 idea / todo / project 三种', () => {
-    expect(d1Sql).toContain("check (type in ('idea', 'todo', 'project'))")
-    // Supabase 那边是 0002 用 alter 放宽的约束
-    expect(pgMigrationSql).toContain("check (type in ('idea', 'todo', 'project'))")
+  it('type 允许 idea / todo / project / log 四种', () => {
+    expect(d1Sql).toContain("check (type in ('idea', 'todo', 'project', 'log'))")
+    // Supabase 那边是 0003 用 alter 放宽的约束
+    expect(pgMigration3Sql).toContain("check (type in ('idea', 'todo', 'project', 'log'))")
   })
 
-  it('大事的两个字段两端都有，且约束一致', () => {
-    for (const sql of [d1Sql, pgMigrationSql]) {
+  it('大事与进展的字段两端都有，且约束一致', () => {
+    for (const sql of [d1Sql, pgMigration3Sql]) {
       expect(sql).toContain('progress')
       expect(sql).toContain('deadline_local_date')
+      expect(sql).toContain('parent_id')
     }
-    expect(d1Columns('records')).toContain('progress')
-    expect(d1Columns('records')).toContain('deadline_local_date')
+    const columns = d1Columns('records')
+    for (const column of ['progress', 'deadline_local_date', 'parent_id']) {
+      expect(columns).toContain(column)
+    }
 
-    // 「非大事不许有进度和截止日」这条红线两端都要有
-    expect(d1Sql).toContain(
-      "check (type = 'project' or (progress is null and deadline_local_date is null))",
-    )
-    expect(pgMigrationSql).toContain('records_project_fields_only')
-    expect(pgMigrationSql).toContain(
-      "check (type = 'project' or (progress is null and deadline_local_date is null))",
-    )
+    // 「哪种类型能带哪个字段」这三条红线两端都要有
+    expect(d1Sql).toContain("check (type = 'project' or deadline_local_date is null)")
+    expect(d1Sql).toContain("check (type in ('project', 'log') or progress is null)")
+    expect(d1Sql).toContain("check (type = 'log' or parent_id is null)")
+    for (const constraint of [
+      'records_deadline_project_only',
+      'records_progress_project_or_log',
+      'records_parent_log_only',
+    ]) {
+      expect(pgMigration3Sql).toContain(constraint)
+    }
+    // 0002 那条大 CHECK 必须被 0003 拆掉 —— 不拆的话 log 带进度会被它拦住，
+    // 而进展记的恰恰就是「写下这条时的进度」。
+    expect(pgMigration3Sql).toContain('drop constraint if exists records_project_fields_only')
   })
 
   it('进度范围约束两端都有', () => {
@@ -174,6 +189,7 @@ describe('产品红线写成了数据库约束', () => {
       'new.id                 <> old.id',
       'new.user_id            <> old.user_id',
       'new.type               <> old.type',
+      'new.parent_id          <> old.parent_id',
     ]) {
       expect(d1Sql).toContain(column)
     }

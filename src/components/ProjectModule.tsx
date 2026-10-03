@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Plus } from 'lucide-react'
-import { recordActions, useOpenProjects } from '../hooks/useRecords'
+import { recordActions, useLogCounts, useOpenProjects } from '../hooks/useRecords'
 import { progressOf, type LocalRecord } from '../domain/record'
 import { uiActions } from '../app/uiStore'
 import { RecordNode } from './RecordNode'
@@ -33,6 +33,7 @@ const INDENT = 'w-[23px]'
  */
 export function ProjectModule({ userId, today }: ProjectModuleProps) {
   const projects = useOpenProjects(userId)
+  const logCounts = useLogCounts(userId)
   const [creating, setCreating] = useState(false)
 
   return (
@@ -72,7 +73,11 @@ export function ProjectModule({ userId, today }: ProjectModuleProps) {
         <ul className="mt-0.5">
           {projects.map((project) => (
             <li key={project.id}>
-              <ProjectRow project={project} today={today} />
+              <ProjectRow
+                project={project}
+                today={today}
+                logCount={logCounts.get(project.id) ?? 0}
+              />
             </li>
           ))}
         </ul>
@@ -81,8 +86,17 @@ export function ProjectModule({ userId, today }: ProjectModuleProps) {
   )
 }
 
-/** 模块里的一件大事：内容 + 进度条 + 倒计时。点开进详情编辑。 */
-function ProjectRow({ project, today }: { project: LocalRecord; today: string }) {
+/** 模块里的一件大事：内容 + 进度条 + 倒计时 + 进展条数。点开进详情编辑。 */
+function ProjectRow({
+  project,
+  today,
+  logCount,
+}: {
+  project: LocalRecord
+  today: string
+  /** 这件大事下有多少条进展（0 时不显示那一行） */
+  logCount: number
+}) {
   const percent = progressOf(project)
 
   return (
@@ -116,6 +130,17 @@ function ProjectRow({ project, today }: { project: LocalRecord; today: string })
           <span className={`${INDENT} shrink-0`} aria-hidden />
           <span className="text-[11.5px] leading-4">
             <ProjectDeadline deadlineLocalDate={project.deadlineLocalDate} today={today} />
+          </span>
+        </span>
+      )}
+
+      {/* 有进展才显示。0 条时留一行「0 条进展」只会占地方 ——
+          它没带来任何信息，而这一屏要尽量塞下更多大事。 */}
+      {logCount === 0 ? null : (
+        <span className="mt-1 flex items-center gap-2.5">
+          <span className={`${INDENT} shrink-0`} aria-hidden />
+          <span className="text-[11.5px] leading-4 text-ink-soft" data-testid="project-log-count">
+            {logCount} 条进展
           </span>
         </span>
       )}

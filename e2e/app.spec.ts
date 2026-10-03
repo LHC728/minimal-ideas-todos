@@ -51,6 +51,22 @@ function timeline(page: Page) {
   return page.getByTestId('timeline')
 }
 
+/**
+ * 关掉详情。
+ *
+ * 桌面端详情是右侧常驻面板（有个关闭按钮），手机端是底部抽屉
+ * （没有标题栏，所以没有按钮，只能 Esc 或点遮罩）。两边都要能关，
+ * 否则这条用例只会在一种视口下过。
+ */
+async function closeDetail(page: Page): Promise<void> {
+  const button = page.getByTestId('detail-close')
+  if ((await button.count()) > 0) {
+    await button.click()
+    return
+  }
+  await page.keyboard.press('Escape')
+}
+
 test.describe('四个一级入口', () => {
   test('手机与桌面都能正确切换四个页面', async ({ page }) => {
     await openApp(page)
@@ -488,5 +504,114 @@ test.describe('大事：目前在做的大事', () => {
     // 清除后回到「还没设截止日」
     await page.getByTestId('project-deadline-clear').click()
     await expect(editor.getByText('还没设截止日')).toBeVisible()
+  })
+})
+
+/**
+ * 进展记录 —— 大事详情里的「做到哪一步了」。
+ *
+ * 进度条只回答「多少」，这里回答「具体到哪一步」。它是 Record(type = 'log')，
+ * 挂在某件大事下，**不进首页时间线 / 日历 / 搜索**（用户拍板）。
+ */
+test.describe('进展记录：在详情里写下做到哪一步', () => {
+  /** 建一件大事并打开它的详情 */
+  async function openProjectDetail(page: Page, content: string): Promise<void> {
+    await page.getByTestId('project-add').click()
+    await page.getByTestId('project-create-input').fill(content)
+    await page.getByTestId('project-create-save').click()
+    await page.getByTestId('project-row').filter({ hasText: content }).click()
+    await expect(page.getByTestId('project-logs')).toBeVisible()
+  }
+
+  /** 写一条进展 */
+  async function writeLog(page: Page, content: string): Promise<void> {
+    await page.getByTestId('project-log-input').fill(content)
+    await page.getByTestId('project-log-save').click()
+    await expect(page.getByTestId('project-log-input')).toHaveValue('')
+  }
+
+  test('写进展 → 带上当时的进度与时间 → 刷新仍在 → 最新在最上', async ({ page }) => {
+    await openApp(page)
+    await openProjectDetail(page, '把机械臂调通')
+
+    const logs = page.getByTestId('project-logs')
+    await expect(logs.getByText('还没有进展')).toBeVisible()
+    await expect(page.getByTestId('project-logs-count')).toHaveText('0 条')
+
+    // 进度 0% 时写第一条
+    await writeLog(page, '电机转起来了')
+
+    const rows = page.getByTestId('project-log-row')
+    await expect(rows).toHaveCount(1)
+    await expect(page.getByTestId('project-logs-count')).toHaveText('1 条')
+    await expect(rows.first()).toContainText('0%')
+    await expect(rows.first()).toContainText('电机转起来了')
+    // 「今天 21:30」这种相对时刻
+    await expect(rows.first().getByTestId('project-log-stamp')).toHaveText(/^今天 \d{2}:\d{2}$/)
+
+    // 推到 50% 再写一条 → 新的一条带着 50%
+    await page.getByTestId('project-preset-50').click()
+    await expect(page.getByTestId('project-percent')).toHaveText('50%')
+    await writeLog(page, '限位搞定了')
+
+    await expect(rows).toHaveCount(2)
+    await expect(rows.first()).toContainText('限位搞定了')
+    await expect(rows.first()).toContainText('50%')
+    await expect(rows.last()).toContainText('电机转起来了')
+
+    // 刷新后两条都还在，顺序不变（刷新会关掉详情，所以重新点开）
+    await page.reload()
+    await expect(page.getByTestId('quick-capture')).toBeVisible()
+    await page.getByTestId('project-row').filter({ hasText: '把机械臂调通' }).click()
+    const afterReload = page.getByTestId('project-log-row')
+    await expect(afterReload).toHaveCount(2)
+    await expect(afterReload.first()).toContainText('限位搞定了')
+
+    // ★ 首页时间线里**不该**出现进展（只出现那件大事）
+    await closeDetail(page)
+    await expect(timeline(page).getByText('限位搞定了')).toHaveCount(0)
+    await expect(timeline(page).getByText('把机械臂调通')).toBeVisible()
+
+    // 模块那一行显示「2 条进展」
+    const row = page.getByTestId('project-row').filter({ hasText: '把机械臂调通' })
+    await expect(row.getByTestId('project-log-count')).toHaveText('2 条进展')
+  })
+
+  test('★ 进展不进搜索 —— 搜得到碎片却看不到它属于哪件大事，是没用的', async ({ page }) => {
+    await openApp(page)
+    await openProjectDetail(page, '把机械臂调通')
+    await writeLog(page, '限位搞定了')
+
+    await closeDetail(page)
+    await page.getByTestId('open-search').click()
+    const panel = page.getByRole('dialog')
+    await page.getByTestId('search-input').fill('限位')
+    await expect(panel.getByText('限位搞定了')).toHaveCount(0)
+    await expect(panel.getByText('没有找到匹配的记录')).toBeVisible()
+  })
+
+  test('进展能改能删，删错了有常驻撤销', async ({ page }) => {
+    await openApp(page)
+    await openProjectDetail(page, '把机械臂调通')
+    await writeLog(page, '限位搞定了')
+
+    // 改：点一下变成编辑框
+    const row = page.getByTestId('project-log-row').first()
+    await row.click()
+    const editor = page.getByTestId('project-log-editor')
+    await expect(editor).toBeVisible()
+    await page.getByTestId('project-log-editor-input').fill('限位搞定了，但有点抖')
+    await page.getByTestId('project-log-editor-save').click()
+    await expect(page.getByTestId('project-log-row').first()).toContainText('但有点抖')
+
+    // 删：编辑框里有删除，删完给常驻撤销（和打勾、删除同一条规矩）
+    await page.getByTestId('project-log-row').first().click()
+    await page.getByTestId('project-log-delete').click()
+    await expect(page.getByTestId('project-log-row')).toHaveCount(0)
+    await expect(page.getByTestId('project-logs-count')).toHaveText('0 条')
+
+    await page.getByRole('button', { name: '撤销' }).click()
+    await expect(page.getByTestId('project-log-row')).toHaveCount(1)
+    await expect(page.getByTestId('project-log-row').first()).toContainText('但有点抖')
   })
 })

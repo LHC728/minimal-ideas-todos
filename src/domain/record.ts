@@ -4,16 +4,22 @@
  *   灵感 = Record(type = "idea")
  *   待办 = Record(type = "todo")
  *   大事 = Record(type = "project")   —— 带进度与截止日
+ *   进展 = Record(type = "log")       —— 挂在某件大事下（parentId 指向它）
  *
  * 四个页面只是对同一份数据的不同观察方式。
  *
- * 「大事」刻意**不新建表**：它必须走同一条同步 / 冲突 / 撤销链路，
- * 否则每加一种记录类型就要再写一遍 Outbox、三方合并和幂等。
- * 代价只是 idea / todo 上多两个恒为 null 的字段。
+ * 「大事」与「进展」都刻意**不新建表**：它们必须走同一条同步 / 冲突 / 撤销链路，
+ * 否则每加一种记录类型就要再写一遍 Outbox、三方合并和幂等 —— 五份代码、
+ * 五个新的丢数据点。代价只是 idea / todo 上多几个恒为 null 的字段。
+ *
+ * ⚠️ 进展（log）是**子记录**，不是第五个一级入口：
+ *   它只在大事详情里出现，**永远不进首页时间线 / 日历 / 搜索**。
+ *   这条约束由本文件底部的过滤器统一保证 —— 加新类型时最容易漏的就是这里，
+ *   漏了的表现是「进展刷屏首页」，而且不报任何错。
  */
 import { parseLocalDate } from '../utils/time'
 
-export type RecordType = 'idea' | 'todo' | 'project'
+export type RecordType = 'idea' | 'todo' | 'project' | 'log'
 
 /** 大事进度的取值范围与步进 */
 export const PROGRESS_MIN = 0
@@ -48,6 +54,14 @@ export interface LocalRecord {
    */
   deadlineLocalDate: string | null
 
+  /**
+   * 所属大事的 id。只有 `type === 'log'` 才有值，其余类型恒为 null。
+   *
+   * 进展的语义就是「这件事的第 N 条记录」，脱离父级没有意义，
+   * 所以它是个必填的关系（在数据库层用 CHECK 钉住：非 log 不许带 parentId）。
+   */
+  parentId: string | null
+
   /** 第一次写下的那一刻，永不改变（§10） */
   createdAtUtc: string
   createdTimezone: string
@@ -77,6 +91,7 @@ export interface RecordSnapshot {
   content: string
   progress: number | null
   deadlineLocalDate: string | null
+  parentId: string | null
   createdAtUtc: string
   createdTimezone: string
   createdLocalDate: string
@@ -98,6 +113,7 @@ export interface CloudRecord {
   content: string
   progress: number | null
   deadlineLocalDate: string | null
+  parentId: string | null
   createdAtUtc: string
   createdTimezone: string
   createdLocalDate: string
@@ -118,6 +134,7 @@ export function snapshotOf(record: LocalRecord): RecordSnapshot {
     content: record.content,
     progress: record.progress,
     deadlineLocalDate: record.deadlineLocalDate,
+    parentId: record.parentId,
     createdAtUtc: record.createdAtUtc,
     createdTimezone: record.createdTimezone,
     createdLocalDate: record.createdLocalDate,
@@ -135,6 +152,7 @@ export function snapshotOfCloud(cloud: CloudRecord): RecordSnapshot {
     content: cloud.content,
     progress: cloud.progress,
     deadlineLocalDate: cloud.deadlineLocalDate,
+    parentId: cloud.parentId,
     createdAtUtc: cloud.createdAtUtc,
     createdTimezone: cloud.createdTimezone,
     createdLocalDate: cloud.createdLocalDate,
@@ -159,6 +177,7 @@ export function emptySnapshot(): RecordSnapshot {
     content: '',
     progress: null,
     deadlineLocalDate: null,
+    parentId: null,
     createdAtUtc: '',
     createdTimezone: 'UTC',
     createdLocalDate: '1970-01-01',
@@ -176,6 +195,7 @@ export function snapshotEquals(a: RecordSnapshot, b: RecordSnapshot): boolean {
     a.content === b.content &&
     a.progress === b.progress &&
     a.deadlineLocalDate === b.deadlineLocalDate &&
+    a.parentId === b.parentId &&
     a.createdAtUtc === b.createdAtUtc &&
     a.createdTimezone === b.createdTimezone &&
     a.createdLocalDate === b.createdLocalDate &&
@@ -206,13 +226,13 @@ export function progressOf(record: LocalRecord): number {
 }
 
 /**
- * 收敛记录类型：只认三种，其余一律当作灵感。
+ * 收敛记录类型：只认四种，其余一律当作灵感。
  *
  * 两套后端的适配器都从这里取 —— 抄两份的话，将来加第四种类型时
  * 必然只改一处，另一处会把新类型悄悄降级成灵感。
  */
 export function clampRecordType(value: unknown): RecordType {
-  if (value === 'todo' || value === 'project') return value
+  if (value === 'todo' || value === 'project' || value === 'log') return value
   return 'idea'
 }
 
@@ -228,6 +248,19 @@ export function clampDeadlineLocalDate(value: unknown): string | null {
 }
 
 /**
+ * 收敛 parentId：只接受非空字符串，其余一律当作「没有父级」。
+ *
+ * 远端可能给来 `''`（空字符串）、数字、甚至对象。空字符串尤其危险 ——
+ * 它既不等于 null（`parentId === null` 判不出「没有父级」），
+ * 又永远匹配不到任何大事的 id（进展会凭空消失，而且查不出原因）。
+ */
+export function clampParentId(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed === '' ? null : trimmed
+}
+
+/**
  * 记录类型在界面上的名字。
  *
  * 放在领域层而不是各页面各写一份三元表达式 —— 加第三种类型那次，
@@ -237,6 +270,7 @@ export const RECORD_TYPE_LABEL: Record<RecordType, string> = {
   idea: '灵感',
   todo: '待办',
   project: '大事',
+  log: '进展',
 }
 
 /** 列表里显示的类型标签：已完成的待办显示「已完成」，其余显示类型名 */
@@ -247,11 +281,21 @@ export function typeLabelOf(record: LocalRecord): string {
 
 // ---------------------------------------------------------------
 // 观察方式（四个页面的语义，§6、§78、§79）
+//
+// ⚠️ 这里就是「进展不进首页」这条红线的**唯一实现点**。
+//    加新记录类型时，只要有一个过滤器忘了排除，进展就会刷屏首页 /
+//    日历 / 搜索 —— 而且不会报任何错。
 // ---------------------------------------------------------------
 
-/** 首页：idea + todo，按创建时间倒序，已完成仍保留（视觉变淡） */
+/**
+ * 首页：idea + todo + project，按创建时间倒序，已完成仍保留（视觉变淡）。
+ *
+ * **排除 log** —— 进展是大事的子记录，只在大事详情里看得到。
+ * 首页回答的是「我什么时候记下了什么」，一屏里塞满「改了个 bug」
+ * 会把真正的时间线淹掉。
+ */
 export function isOnTimeline(record: LocalRecord): boolean {
-  return record.deletedAtUtc === null
+  return record.deletedAtUtc === null && record.type !== 'log'
 }
 
 /** 灵感页 */
@@ -274,6 +318,22 @@ export function isProject(record: LocalRecord): boolean {
   return record.deletedAtUtc === null && record.type === 'project'
 }
 
+/** 进展记录（大事详情里的那一条） */
+export function isLog(record: LocalRecord): boolean {
+  return record.deletedAtUtc === null && record.type === 'log'
+}
+
+/**
+ * 某件大事下的进展。
+ *
+ * 父级被软删时进展**不跟着消失** —— 它自己的 deletedAtUtc 是独立的。
+ * 这是刻意的：用户撤销「删除大事」之后，写过的进展要原样回来。
+ * 真要一起清掉，那是「清空进展」这个动作该做的事，不该由父级连坐。
+ */
+export function isLogOf(record: LocalRecord, projectId: string): boolean {
+  return isLog(record) && record.parentId === projectId
+}
+
 /**
  * 还在推进中的大事：进度没到 100。
  *
@@ -284,9 +344,15 @@ export function isOpenProject(record: LocalRecord): boolean {
   return isProject(record) && progressOf(record) < PROGRESS_MAX
 }
 
-/** 搜索：content 包含关键字，不含已删除（§61） */
+/**
+ * 搜索：content 包含关键字，不含已删除（§61）。
+ *
+ * 同样**排除 log**：搜到一条「限位搞定了」却看不到它属于哪件大事，
+ * 是个没有上下文的碎片。要找进展就打开那件大事。
+ */
 export function matchesQuery(record: LocalRecord, query: string): boolean {
   if (record.deletedAtUtc !== null) return false
+  if (record.type === 'log') return false
   const q = query.trim().toLowerCase()
   if (!q) return true
   return record.content.toLowerCase().includes(q)

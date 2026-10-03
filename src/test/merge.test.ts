@@ -18,6 +18,7 @@ function snap(overrides: Partial<RecordSnapshot> = {}): RecordSnapshot {
     content: 'AAA',
     progress: null,
     deadlineLocalDate: null,
+    parentId: null,
     createdAtUtc: '2026-09-29T16:00:00.000Z',
     createdTimezone: 'Asia/Shanghai',
     createdLocalDate: '2026-09-30',
@@ -226,6 +227,39 @@ describe('大事（project）的进度与截止日', () => {
     const patch = diffSnapshot(from, to)
     expect(patch.progress).toBe(60)
     expect(patch.deadlineLocalDate).toBe('2026-10-15')
+  })
+})
+
+describe('进展（log）的 parentId', () => {
+  it('parentId 永远跟随 base —— 它是写下来那刻定死的，不进冲突列表', () => {
+    const base = snap({ type: 'log', content: '限位搞定了', progress: 50, parentId: 'p-1' })
+    // 远端数据损坏，带了个别的 parentId
+    const local = snap({ type: 'log', content: '限位搞定了', progress: 50, parentId: 'p-1' })
+    const remote = snap({ type: 'log', content: '限位搞定了', progress: 50, parentId: 'p-9' })
+
+    const result = threeWayMerge(base, local, remote)
+    expect(result.autoMerged.parentId).toBe('p-1')
+    expect(result.merged.parentId).toBe('p-1')
+    // 不该冒出「这条进展该挂在哪件大事下」这种用户无从判断的选项
+    expect(result.conflicts).toEqual([])
+  })
+
+  it('进展的进度参与正常三方合并（和大事同一套规则）', () => {
+    const base = snap({ type: 'log', content: '第一步', progress: 20, parentId: 'p-1' })
+    const local = snap({ type: 'log', content: '第一步', progress: 20, parentId: 'p-1' })
+    const remote = snap({ type: 'log', content: '第一步', progress: 60, parentId: 'p-1' })
+
+    const result = threeWayMerge(base, local, remote)
+    expect(result.conflicts).toEqual([])
+    expect(result.merged.progress).toBe(60)
+  })
+
+  it('diffSnapshot 不会因为 parentId 相同而漏掉其它字段，也不会凭空产出 parentId', () => {
+    const from = snap({ type: 'log', content: '旧', parentId: 'p-1' })
+    const to = snap({ type: 'log', content: '新', parentId: 'p-1' })
+    const patch = diffSnapshot(from, to)
+    expect(patch.content).toBe('新')
+    expect('parentId' in patch).toBe(false)
   })
 })
 

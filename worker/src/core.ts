@@ -51,6 +51,7 @@ export interface RecordRow {
   content: string
   progress: number | null
   deadline_local_date: string | null
+  parent_id: string | null
   created_at_utc: string
   created_timezone: string
   created_local_date: string
@@ -69,10 +70,11 @@ export interface RecordRow {
 export interface CloudRecordOut {
   id: string
   userId: string
-  type: 'idea' | 'todo' | 'project'
+  type: 'idea' | 'todo' | 'project' | 'log'
   content: string
   progress: number | null
   deadlineLocalDate: string | null
+  parentId: string | null
   createdAtUtc: string
   createdTimezone: string
   createdLocalDate: string
@@ -85,10 +87,23 @@ export interface CloudRecordOut {
   serverUpdatedAt: string
 }
 
-/** 只认三种类型，其余一律降级成 idea —— 与客户端 clampRecordType 同一套语义 */
-function asType(value: unknown): 'idea' | 'todo' | 'project' {
-  if (value === 'todo' || value === 'project') return value
+/** 只认四种类型，其余一律降级成 idea —— 与客户端 clampRecordType 同一套语义 */
+function asType(value: unknown): 'idea' | 'todo' | 'project' | 'log' {
+  if (value === 'todo' || value === 'project' || value === 'log') return value
   return 'idea'
+}
+
+/**
+ * parentId 归一：只接受非空字符串，其余当「没有父级」。
+ *
+ * 空字符串尤其要挡掉 —— 它既不等于 null，又匹配不到任何大事的 id，
+ * 放进去会让那条进展在所有设备上都「挂在一个不存在的大事下」，
+ * 界面上表现为进展凭空消失。
+ */
+function asParentId(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed === '' ? null : trimmed
 }
 
 /**
@@ -144,6 +159,7 @@ export function toCloudRecord(row: RecordRow): CloudRecordOut {
     content: row.content,
     progress: asProgress(row.progress),
     deadlineLocalDate: asDeadline(row.deadline_local_date),
+    parentId: asParentId(row.parent_id),
     createdAtUtc: row.created_at_utc,
     createdTimezone: row.created_timezone,
     createdLocalDate: row.created_local_date,
@@ -164,6 +180,7 @@ const RECORD_COLUMNS = [
   'content',
   'progress',
   'deadline_local_date',
+  'parent_id',
   'created_at_utc',
   'created_timezone',
   'created_local_date',
@@ -340,21 +357,25 @@ export async function applyMutation(
     }
 
     const type = asType(str(payload, 'type'))
-    // 进度和截止日只属于大事。灵感 / 待办即使 payload 里带了也一律丢弃 ——
-    // 这与客户端 `createRecord` 的行为一致，也是数据库那条
-    // 「非 project 不许有 progress」CHECK 能一直成立的前提。
+    // 哪些字段对哪种类型有意义，与客户端 `createRecord` 逐条对齐：
+    //   progress  → 大事、进展
+    //   deadline  → 只有大事
+    //   parentId  → 只有进展
+    // 这是数据库那几条 CHECK（「非大事不许有截止日」等）能一直成立的前提。
+    const keepsProgress = type === 'project' || type === 'log'
     const isProject = type === 'project'
+    const isLog = type === 'log'
 
     const insertRecord = db
       .prepare(
         `insert into records (
            id, user_id, type, content,
-           progress, deadline_local_date,
+           progress, deadline_local_date, parent_id,
            created_at_utc, created_timezone, created_local_date,
            updated_at_utc, updated_timezone,
            completed_at_utc, completed_timezone, deleted_at_utc,
            version, server_updated_at
-         ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+         ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
          on conflict (id) do nothing`,
       )
       .bind(
@@ -362,8 +383,9 @@ export async function applyMutation(
         userId,
         type,
         strOr(payload, 'content', ''),
-        isProject ? asProgress(payload['progress']) : null,
+        keepsProgress ? asProgress(payload['progress']) : null,
         isProject ? asDeadline(payload['deadlineLocalDate']) : null,
+        isLog ? asParentId(payload['parentId']) : null,
         str(payload, 'createdAtUtc') ?? now,
         str(payload, 'createdTimezone') ?? 'UTC',
         str(payload, 'createdLocalDate') ?? now.slice(0, 10),
@@ -405,9 +427,13 @@ export async function applyMutation(
 
     const setContent = str(payload, 'content') !== null
     // type 在数据库层是不可变的，所以用当前行的 type 判断即可 ——
-    // 非大事的 progress / deadline 一律当没传，保持与客户端同一套语义。
+    // 非大事 / 非进展的 progress 一律当没传，保持与客户端同一套语义。
+    // ⚠️ parent_id 刻意**不在这里处理**：进展「属于哪件大事」是写下的
+    //    那一刻定死的，服务端把它当不可变字段（触发器也钉住了），
+    //    更新路径根本不看它，这样任何 payload 都改不动它。
+    const keepsProgress = current.type === 'project' || current.type === 'log'
     const isProject = current.type === 'project'
-    const setProgress = isProject && has(payload, 'progress')
+    const setProgress = keepsProgress && has(payload, 'progress')
     const setDeadline = isProject && has(payload, 'deadlineLocalDate')
     const setUpdatedAt = str(payload, 'updatedAtUtc') !== null
     const setUpdatedTz = str(payload, 'updatedTimezone') !== null

@@ -88,6 +88,36 @@ export class AppDatabase extends Dexie {
             if (raw['deadlineLocalDate'] === undefined) raw['deadlineLocalDate'] = null
           })
       })
+
+    // ---- v3：进展记录（log）新增 parentId ----
+    //
+    // 与 v2 同一个理由：老记录里没有 `parentId` 这个键（`undefined`），
+    // 而云端返回的是 `null`。`snapshotEquals` 用严格相等，`undefined ≠ null`
+    // 会让「另一台设备没动过这条记录」被判成「动过」，凭空造出一个
+    // 要用户裁决的删除冲突弹窗。一次性补齐成 null，之后语义就统一了。
+    //
+    // 索引刻意不变：进展的查询走「取该用户全部记录再在内存里过滤」，
+    // 数据量是「一个人的记录」，加索引只会多一处要维护的东西。
+    this.version(3)
+      .stores({
+        records:
+          'id, userId, type, createdAtUtc, createdLocalDate, deletedAtUtc, syncState, ' +
+          '[userId+type], [userId+createdLocalDate], [userId+deletedAtUtc]',
+        outbox:
+          'mutationId, recordId, userId, state, createdAt, ' +
+          '[recordId+state], [userId+state], [state+createdAt]',
+        conflicts: 'recordId, userId, kind, createdAt',
+        meta: 'key',
+      })
+      .upgrade(async (transaction) => {
+        await transaction
+          .table('records')
+          .toCollection()
+          .modify((record: LocalRecord) => {
+            const raw = record as unknown as Record<string, unknown>
+            if (raw['parentId'] === undefined) raw['parentId'] = null
+          })
+      })
   }
 }
 

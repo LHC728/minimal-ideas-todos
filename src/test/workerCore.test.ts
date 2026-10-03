@@ -174,6 +174,7 @@ describe('toCloudRecord 映射', () => {
       content: '内容',
       progress: null,
       deadline_local_date: null,
+      parent_id: null,
       created_at_utc: T0,
       created_timezone: 'Asia/Shanghai',
       created_local_date: '2026-09-30',
@@ -192,6 +193,7 @@ describe('toCloudRecord 映射', () => {
       content: '内容',
       progress: null,
       deadlineLocalDate: null,
+      parentId: null,
       createdAtUtc: T0,
       createdTimezone: 'Asia/Shanghai',
       createdLocalDate: '2026-09-30',
@@ -205,7 +207,7 @@ describe('toCloudRecord 映射', () => {
     })
   })
 
-  it('未知 type 一律归为 idea（客户端类型只有三种）', () => {
+  it('未知 type 一律归为 idea（客户端类型只有四种）', () => {
     const row = db.row<RecordRow>('select 1 as id') // 占位，仅借类型
     expect(row).not.toBeNull()
     expect(
@@ -225,6 +227,28 @@ describe('toCloudRecord 映射', () => {
     expect(mapped.type).toBe('project')
     expect(mapped.progress).toBe(60)
     expect(mapped.deadlineLocalDate).toBe('2026-10-12')
+  })
+
+  it('log 类型与 parentId 原样透出', () => {
+    const row = db.row<RecordRow>('select 1 as id')
+    const mapped = toCloudRecord({
+      ...(row as RecordRow),
+      type: 'log',
+      progress: 40,
+      parent_id: 'p-1',
+      version: 1,
+    })
+    expect(mapped.type).toBe('log')
+    expect(mapped.progress).toBe(40)
+    expect(mapped.parentId).toBe('p-1')
+  })
+
+  it('parent_id 是空字符串时当「没有父级」，不是空串', () => {
+    // 空串既不等于 null、又匹配不到任何大事 id，放出去那条进展会在
+    // 所有设备上都「挂在一个不存在的大事下」——界面上就是凭空消失。
+    const row = db.row<RecordRow>('select 1 as id')
+    expect(toCloudRecord({ ...(row as RecordRow), type: 'log', parent_id: '  ', version: 1 }).parentId)
+      .toBeNull()
   })
 
   it('越界的进度与畸形的截止日在出口被收敛掉', () => {
@@ -528,6 +552,106 @@ describe('applyMutation — complete / uncomplete / delete / restore', () => {
 })
 
 // =====================================================================
+describe('applyMutation — 进展（log）', () => {
+  /** 建一条挂在 p-1 下的进展，作为下面几个用例的起点 */
+  async function createLog(overrides: Partial<ApplyMutationInput> = {}): Promise<void> {
+    await applyMutation(
+      db,
+      USER_A,
+      input({
+        mutationId: 'm-log',
+        recordId: 'r-log',
+        payload: { type: 'log', content: '写下来', progress: 50, parentId: 'p-1' },
+        ...overrides,
+      }),
+      T0,
+    )
+  }
+
+  it('create log：progress 与 parentId 都落库', async () => {
+    await createLog()
+    const row = db.row<{ type: string; progress: number; parent_id: string }>(
+      'select type, progress, parent_id from records where id = ?',
+      'r-log',
+    )
+    expect(row?.type).toBe('log')
+    expect(row?.progress).toBe(50)
+    expect(row?.parent_id).toBe('p-1')
+  })
+
+  it('非 log 即使带了 parentId 也一律丢弃', async () => {
+    const result = await applyMutation(
+      db,
+      USER_A,
+      input({ payload: { type: 'todo', content: '一件事', parentId: 'p-1' } }),
+      T0,
+    )
+    expect(result.record?.parentId).toBeNull()
+  })
+
+  it('log 的 parentId 为空字符串 → 当作没有父级，不落空串', async () => {
+    // 空串落库的话，那条进展在所有设备上都匹配不到大事 —— 界面表现是凭空消失
+    await createLog({ payload: { type: 'log', content: 'x', parentId: '' } })
+    expect(
+      db.row<{ parent_id: string | null }>('select parent_id from records where id = ?', 'r-log')
+        ?.parent_id,
+    ).toBeNull()
+  })
+
+  it('log 不许带截止日 —— 截止日是大事独有的', async () => {
+    const result = await applyMutation(
+      db,
+      USER_A,
+      input({
+        mutationId: 'm-log',
+        recordId: 'r-log',
+        payload: { type: 'log', content: 'x', parentId: 'p-1', deadlineLocalDate: '2026-10-12' },
+      }),
+      T0,
+    )
+    expect(result.status).toBe('applied')
+    expect(result.record?.deadlineLocalDate).toBeNull()
+  })
+
+  it('★ update 改不动 parent_id —— payload 里塞了也一个字都不动', async () => {
+    await createLog()
+    const moved = await applyMutation(
+      db,
+      USER_A,
+      input({
+        mutationId: 'm-move',
+        recordId: 'r-log',
+        operation: 'update',
+        expectedVersion: 1,
+        payload: { content: '改内容', parentId: 'p-2' },
+      }),
+      T1,
+    )
+    expect(moved.status).toBe('applied')
+    expect(moved.record?.content).toBe('改内容')
+    expect(moved.record?.parentId).toBe('p-1')
+  })
+
+  it('进展的进度可以改（进度对大事和进展都有意义）', async () => {
+    await createLog()
+    const bumped = await applyMutation(
+      db,
+      USER_A,
+      input({
+        mutationId: 'm-bump',
+        recordId: 'r-log',
+        operation: 'update',
+        expectedVersion: 1,
+        payload: { progress: 60 },
+      }),
+      T1,
+    )
+    expect(bumped.record?.progress).toBe(60)
+    expect(bumped.record?.parentId).toBe('p-1')
+  })
+})
+
+// =====================================================================
 describe('数据库红线（触发器真的会拦住越界操作）', () => {
   beforeEach(async () => {
     await applyMutation(db, USER_A, input(), T0)
@@ -562,6 +686,24 @@ describe('数据库红线（触发器真的会拦住越界操作）', () => {
     }
   })
 
+  it('改 parent_id 被拒绝 —— 进展属于哪件大事是写下来那刻定死的', async () => {
+    await applyMutation(
+      db,
+      USER_A,
+      input({
+        mutationId: 'm-log',
+        recordId: 'r-log',
+        payload: { type: 'log', content: 'x', parentId: 'p-1' },
+      }),
+      T0,
+    )
+    // 新值 'p-2' 对 log 来说是合法的（不是 null），所以能拦住它的
+    // 只能是「创建字段不可变」触发器，而不是 CHECK。
+    expect(() =>
+      db.exec(`update records set parent_id = 'p-2', version = version + 1 where id = 'r-log'`),
+    ).toThrow(/created_fields_are_immutable/)
+  })
+
   it('不让 version 变大的 UPDATE 一律被拒绝 —— 杜绝「悄悄改了内容却没留痕」', () => {
     expect(() => db.exec(`update records set content = '偷偷改' where id = 'r-1'`)).toThrow(
       /version_must_increase/,
@@ -575,6 +717,64 @@ describe('数据库红线（触发器真的会拦住越界操作）', () => {
     expect(() =>
       db.exec(`update applied_mutations set result_version = 99 where mutation_id = 'm-1'`),
     ).toThrow(/mutation_result_is_final/)
+  })
+})
+
+// =====================================================================
+describe('「哪种类型能带哪个字段」由 CHECK 兜住', () => {
+  /**
+   * 这一组全部走裸 INSERT 而不是 applyMutation：
+   * UPDATE 会先撞上「创建字段不可变」触发器，测到的就不是 CHECK 了。
+   * INSERT 没有触发器干扰，才是 CHECK 本身的结论。
+   */
+  function insert(sql: string): void {
+    db.exec(sql)
+  }
+
+  const TAIL = `'${T0}', 'UTC', '2026-09-30', '${T0}', 1, '${T0}')`
+
+  it('非 log 不许带 parent_id', () => {
+    expect(() =>
+      insert(
+        `insert into records (id, user_id, type, content, parent_id,
+           created_at_utc, created_timezone, created_local_date,
+           updated_at_utc, version, server_updated_at)
+         values ('r-x', '${USER_A}', 'todo', 'x', 'p-1', ${TAIL}`,
+      ),
+    ).toThrow(/constraint/i)
+  })
+
+  it('log 不许带截止日', () => {
+    expect(() =>
+      insert(
+        `insert into records (id, user_id, type, content, deadline_local_date, parent_id,
+           created_at_utc, created_timezone, created_local_date,
+           updated_at_utc, version, server_updated_at)
+         values ('r-y', '${USER_A}', 'log', 'x', '2026-10-12', 'p-1', ${TAIL}`,
+      ),
+    ).toThrow(/constraint/i)
+  })
+
+  it('灵感 / 待办仍然不许带进度', () => {
+    expect(() =>
+      insert(
+        `insert into records (id, user_id, type, content, progress,
+           created_at_utc, created_timezone, created_local_date,
+           updated_at_utc, version, server_updated_at)
+         values ('r-z', '${USER_A}', 'todo', 'x', 50, ${TAIL}`,
+      ),
+    ).toThrow(/constraint/i)
+  })
+
+  it('log 带进度是合法的（这正是这次迁移要放开的那一条）', () => {
+    expect(() =>
+      insert(
+        `insert into records (id, user_id, type, content, progress, parent_id,
+           created_at_utc, created_timezone, created_local_date,
+           updated_at_utc, version, server_updated_at)
+         values ('r-ok', '${USER_A}', 'log', 'x', 50, 'p-1', ${TAIL}`,
+      ),
+    ).not.toThrow()
   })
 })
 

@@ -15,12 +15,17 @@ interface RecordNodeProps {
  *   空心圆角方  = 待办（雾蓝，待勾选的行动）
  *   实心方 + 勾 = 待办已完成
  *   实心胶囊    = 大事（靛紫，一段正在被填满的进度）
+ *   细横线      = 进展（大事下的一条记录，只在详情面板里出现）
  *
  * 形状本身编码了类型，用户不用读文字就能扫出哪条是什么。
  * 导航图标沿用同一套语言（圆形 / 方形），保持认知一致。
  *
  * 大事用「横着的胶囊」而不是第三种方块：它要一眼区别于待办的方，
  * 而胶囊本身就读作「一条进度条」—— 形状和它的含义是对上的。
+ *
+ * 进展那一支是**防御性**的：进展被过滤器挡在时间线 / 日历 / 搜索之外，
+ * 正常渲染路径走不到这里。但万一哪天漏了一处，它会画成一条细线，
+ * 而不是悄悄退化成待办的方框（那会让人以为是条待办，查起来更费劲）。
  */
 export function RecordNode({ type, completed = false, className = '' }: RecordNodeProps) {
   if (type === 'idea') {
@@ -36,6 +41,15 @@ export function RecordNode({ type, completed = false, className = '' }: RecordNo
     return (
       <span
         className={`block h-[8px] w-[13px] shrink-0 rounded-full bg-project ${className}`}
+        aria-hidden
+      />
+    )
+  }
+
+  if (type === 'log') {
+    return (
+      <span
+        className={`block h-[2px] w-[11px] shrink-0 rounded-full bg-project/60 ${className}`}
         aria-hidden
       />
     )

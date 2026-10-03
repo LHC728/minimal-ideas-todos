@@ -1,19 +1,24 @@
 // @vitest-environment node
 /**
- * D1 迁移 0002 的验证 —— 在**真实 SQLite** 上，从老 schema + 真实数据跑到新 schema。
+ * D1 迁移的验证 —— 在**真实 SQLite** 上，从老 schema + 真实数据一路跑到新 schema。
  *
- * 为什么必须单独测这一个迁移：
- *   它是本项目唯一一次需要**重建 records 表**的迁移（SQLite 改不了 CHECK 约束）。
- *   重建表 = drop 触发器 + rename + 建新表 + 搬数据 + drop 旧表 + 重建索引和触发器。
- *   这里面任何一步写漏都**不会报错**：
+ * 为什么必须单独测这个文件：
+ *   0002（大事）与 0003（进展）都是**需要重建 records 表**的迁移
+ *   （SQLite 改不了 CHECK 约束）。重建表 = drop 触发器 + rename + 建新表 +
+ *   搬数据 + drop 旧表 + 重建索引和触发器。这里面任何一步写漏都**不会报错**：
  *     · 索引忘了重建  → 查询悄悄退化成全表扫描，功能看着一切正常
  *     · 触发器忘了重建 → 「创建时间不可变」「只能软删除」这些红线**直接消失**
  *     · 列顺序写错    → 数据静默串列（content 里装着时间戳）
- *   这三种错人工核对都看不出来，所以必须让机器逐条验。
+ *     · 搬数据时漏带某一列 → 用户的大事进度**凭空归零**，而且没有报错
+ *   这些错人工核对都看不出来，所以必须让机器逐条验。
  *
- * 另外这里还钉住一件事：**迁移后的表结构必须与全新安装（schema.sql）逐列一致**。
- * 否则「老用户升级上来的库」和「新用户的库」会长得不一样，
- * 而这种差异通常要到几个月后某个查询出错才会暴露。
+ * 另外这里还钉住两件事：
+ *   ① **迁移后的表结构必须与全新安装（schema.sql）逐列一致**。否则
+ *      「老用户升级上来的库」和「新用户的库」会长得不一样，而这种差异
+ *      通常要到几个月后某个查询出错才会暴露。
+ *   ② **冻结副本没有被跟着改**。如果哪天有人顺手把 __fixtures__ 里的
+ *      老 schema 更新成新的，这个文件就变成「拿新表结构测新表结构」，
+ *      彻底失去意义 —— 所以下面有一组用例专门盯住它。
  */
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -23,21 +28,29 @@ import { describe, expect, it } from 'vitest'
 const SCHEMA = readFileSync(resolve(process.cwd(), 'worker/schema.sql'), 'utf8')
 
 /**
- * ⚠️ 这是 0002 **之前**的完整 schema 冻结副本（连 users / access_tokens /
- * applied_mutations 和全部触发器一起），作为迁移测试的输入。
- * 它是历史事实，**永远不要跟着 worker/schema.sql 一起改** ——
- * 改了就等于拿新表结构去测新表结构，这个测试会彻底失去意义。
+ * ⚠️ 这两个都是**冻结副本**（连 users / access_tokens / applied_mutations
+ * 和全部触发器一起），作为迁移测试的输入。
+ * 它们是历史事实，**永远不要跟着 worker/schema.sql 一起改** ——
+ * 改了就等于拿新表结构去测新表结构。
  *
  * 只留一张 records 表的残缺样本会得出「触发器数量不一致」「索引集合不一致」
  * 这种假警报 —— 实测踩过。
  */
-const LEGACY_SCHEMA = readFileSync(
+const LEGACY_0001 = readFileSync(
   resolve(process.cwd(), 'worker/migrations/__fixtures__/schema-0001.sql'),
   'utf8',
 )
+const FROZEN_0002 = readFileSync(
+  resolve(process.cwd(), 'worker/migrations/__fixtures__/schema-0002.sql'),
+  'utf8',
+)
 
-const MIGRATION = readFileSync(
+const MIGRATION_0002 = readFileSync(
   resolve(process.cwd(), 'worker/migrations/0002_project_type.sql'),
+  'utf8',
+)
+const MIGRATION_0003 = readFileSync(
+  resolve(process.cwd(), 'worker/migrations/0003_log_type.sql'),
   'utf8',
 )
 
@@ -84,12 +97,51 @@ function insertLegacy(
   )
 }
 
-/** 老库 + 真实数据，然后跑迁移 */
-function migratedDb(): DatabaseSync {
+/** 0002 之后才存在的形状：大事带进度与截止日 */
+function insertProject(db: DatabaseSync, id: string, progress: number, deadline: string): void {
+  db.prepare(
+    `insert into records (
+       id, user_id, type, content, progress, deadline_local_date,
+       created_at_utc, created_timezone, created_local_date,
+       updated_at_utc, updated_timezone,
+       completed_at_utc, completed_timezone, deleted_at_utc,
+       version, server_updated_at
+     ) values (?, 'u-1', 'project', '毕业论文', ?, ?,
+       '2026-10-01T01:00:00.000Z', 'Asia/Shanghai', '2026-10-01',
+       '2026-10-01T01:00:00.000Z', 'Asia/Shanghai',
+       null, null, null, 2, '2026-10-01T01:00:00.000Z')`,
+  ).run(id, progress, deadline)
+}
+
+/** 0003 之后才存在的形状：进展挂在某件大事下，带当时的进度快照 */
+function insertLog(db: DatabaseSync, id: string, parentId: string): void {
+  db.prepare(
+    `insert into records (
+       id, user_id, type, content, progress, parent_id,
+       created_at_utc, created_timezone, created_local_date,
+       updated_at_utc, updated_timezone,
+       completed_at_utc, completed_timezone, deleted_at_utc,
+       version, server_updated_at
+     ) values (?, 'u-1', 'log', '限位搞定了', 50, ?,
+       '2026-10-02T01:00:00.000Z', 'Asia/Shanghai', '2026-10-02',
+       '2026-10-02T01:00:00.000Z', 'Asia/Shanghai',
+       null, null, null, 1, '2026-10-02T01:00:00.000Z')`,
+  ).run(id, parentId)
+}
+
+/** 老库 + 真实数据 + 0002 —— 相当于「线上 2026-10-03 那天」的库 */
+function dbAfter0002(): DatabaseSync {
   const db = new DatabaseSync(':memory:')
-  db.exec(LEGACY_SCHEMA)
+  db.exec(LEGACY_0001)
   for (const row of SEED) insertLegacy(db, row)
-  db.exec(MIGRATION)
+  db.exec(MIGRATION_0002)
+  return db
+}
+
+/** 全链：老库 + 真实数据 + 0002 + 0003 */
+function migratedDb(): DatabaseSync {
+  const db = dbAfter0002()
+  db.exec(MIGRATION_0003)
   return db
 }
 
@@ -115,7 +167,7 @@ function names(db: DatabaseSync, type: string): string[] {
 describe('迁移前：老库确实装不下 project（先确认这个前提成立）', () => {
   it('老表的 CHECK 约束会拒绝 project', () => {
     const db = new DatabaseSync(':memory:')
-    db.exec(LEGACY_SCHEMA)
+    db.exec(LEGACY_0001)
     expect(() => insertLegacy(db, { id: 'r-p', type: 'project', content: 'x', deleted: null, version: 1 }))
       .toThrow(/constraint/i)
     db.close()
@@ -150,13 +202,15 @@ describe('迁移后：数据一条不少、一列不串', () => {
 
   it('新列存在，且老数据一律补成 null', () => {
     const db = migratedDb()
-    expect(columns(db, 'records')).toContain('progress')
-    expect(columns(db, 'records')).toContain('deadline_local_date')
+    for (const column of ['progress', 'deadline_local_date', 'parent_id']) {
+      expect(columns(db, 'records')).toContain(column)
+    }
 
-    const rows = db.prepare('select progress, deadline_local_date from records').all()
+    const rows = db.prepare('select progress, deadline_local_date, parent_id from records').all()
     for (const row of rows) {
       expect(row['progress']).toBeNull()
       expect(row['deadline_local_date']).toBeNull()
+      expect(row['parent_id']).toBeNull()
     }
     db.close()
   })
@@ -354,5 +408,117 @@ describe('★ 迁移结果必须与全新安装逐列一致', () => {
 
     fresh.close()
     migrated.close()
+  })
+})
+
+// =====================================================================
+describe('★ 0003 必须把大事的进度原样带过去（0002 那次只能补 null）', () => {
+  /**
+   * 这是 0003 最危险的一处：它和 0002 一样是「重建表 + 搬数据」，
+   * 但搬的东西不一样 —— 0002 时 progress 是**刚加的新列**，补 null 是对的；
+   * 0003 时线上已经有大事带着真实进度了，照抄 0002 的 `select null`
+   * 会把用户填过的进度全部清零，而且**不报任何错**。
+   */
+
+  it('前提：0002 之后的库装不下 log（两处都挡着）', () => {
+    const db = dbAfter0002()
+    // 第一处：连 parent_id 这一列都还没有
+    expect(() => insertLog(db, 'r-log', 'p-1')).toThrow(/no column named parent_id/i)
+    // 第二处：type 的 CHECK 也不认 'log'
+    expect(() =>
+      db.exec(
+        `insert into records (id, user_id, type, content,
+           created_at_utc, created_timezone, created_local_date,
+           updated_at_utc, version, server_updated_at)
+         values ('r-log-2', 'u-1', 'log', 'x',
+           '2026-10-02T00:00:00.000Z', 'UTC', '2026-10-02',
+           '2026-10-02T00:00:00.000Z', 1, '2026-10-02T00:00:00.000Z')`,
+      ),
+    ).toThrow(/constraint/i)
+    db.close()
+  })
+
+  it('前提：0002 之后的库里大事确实带着真实进度', () => {
+    const db = dbAfter0002()
+    insertProject(db, 'r-proj', 60, '2026-10-12')
+    const row = db.prepare("select progress from records where id = 'r-proj'").get()
+    expect(row?.['progress']).toBe(60)
+    db.close()
+  })
+
+  it('跑完 0003，进度与截止日一个都没丢', () => {
+    const db = dbAfter0002()
+    insertProject(db, 'r-proj', 60, '2026-10-12')
+    db.exec(MIGRATION_0003)
+
+    const row = db
+      .prepare("select type, progress, deadline_local_date, parent_id from records where id = 'r-proj'")
+      .get()
+    expect(row?.['type']).toBe('project')
+    expect(row?.['progress']).toBe(60)
+    expect(row?.['deadline_local_date']).toBe('2026-10-12')
+    // 老数据里不可能有 log，所以 parent_id 补 null 是对的
+    expect(row?.['parent_id']).toBeNull()
+    db.close()
+  })
+
+  it('跑完 0003，可以插入 log，并带 parentId 与进度快照', () => {
+    const db = migratedDb()
+    insertLog(db, 'r-log', 'p-1')
+
+    const row = db
+      .prepare("select type, progress, parent_id, deadline_local_date from records where id = 'r-log'")
+      .get()
+    expect(row?.['type']).toBe('log')
+    expect(row?.['progress']).toBe(50)
+    expect(row?.['parent_id']).toBe('p-1')
+    expect(row?.['deadline_local_date']).toBeNull()
+    db.close()
+  })
+
+  it('0003 之后：非 log 不许带 parent_id，log 不许带截止日', () => {
+    const db = migratedDb()
+    // 灵感带 parent_id
+    expect(() =>
+      db.exec(
+        `insert into records (id, user_id, type, content, parent_id,
+           created_at_utc, created_timezone, created_local_date,
+           updated_at_utc, version, server_updated_at)
+         values ('r-bad-1', 'u-1', 'idea', 'x', 'p-1',
+           '2026-10-02T00:00:00.000Z', 'UTC', '2026-10-02',
+           '2026-10-02T00:00:00.000Z', 1, '2026-10-02T00:00:00.000Z')`,
+      ),
+    ).toThrow(/constraint/i)
+    // 进展带截止日
+    expect(() =>
+      db.exec(
+        `insert into records (id, user_id, type, content, deadline_local_date, parent_id,
+           created_at_utc, created_timezone, created_local_date,
+           updated_at_utc, version, server_updated_at)
+         values ('r-bad-2', 'u-1', 'log', 'x', '2026-10-12', 'p-1',
+           '2026-10-02T00:00:00.000Z', 'UTC', '2026-10-02',
+           '2026-10-02T00:00:00.000Z', 1, '2026-10-02T00:00:00.000Z')`,
+      ),
+    ).toThrow(/constraint/i)
+    db.close()
+  })
+})
+
+// =====================================================================
+describe('★ 冻结副本没有被跟着改（否则这个文件会彻底失去意义）', () => {
+  it('schema-0001.sql 里连 progress 都没有（那是 0002 才加的）', () => {
+    expect(LEGACY_0001).not.toContain('progress')
+    expect(LEGACY_0001).toContain("check (type in ('idea', 'todo'))")
+  })
+
+  it('schema-0002.sql 里有 progress，但没有 parent_id（那是 0003 才加的）', () => {
+    expect(FROZEN_0002).toContain('progress')
+    expect(FROZEN_0002).toContain("check (type in ('idea', 'todo', 'project'))")
+    expect(FROZEN_0002).not.toContain('parent_id')
+  })
+
+  it('两个副本都与当前 schema.sql 不同（说明它们真的是历史快照）', () => {
+    expect(LEGACY_0001).not.toBe(SCHEMA)
+    expect(FROZEN_0002).not.toBe(SCHEMA)
   })
 })

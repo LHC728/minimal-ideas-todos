@@ -23,6 +23,7 @@ import {
   groupByLocalDate,
   byCompletedAtDesc,
   isDoneTodo,
+  isLogOf,
   isOpenProject,
   isOpenTodo,
   isOnTimeline,
@@ -583,5 +584,190 @@ describe('大事：进度与截止日', () => {
 
     const sorted = [noDeadline, late, soon].toSorted(byDeadlineAsc)
     expect(sorted.map((r) => r.content)).toEqual(['快到了', '晚一点', '没有截止日'])
+  })
+})
+
+// =====================================================================
+describe('进展记录（log）', () => {
+  /** 一件大事 + 挂在它下面的两条进展 */
+  async function setupProject(): Promise<{ projectId: string; logs: string[] }> {
+    const project = await createRecord({
+      userId: USER,
+      type: 'project',
+      content: '做一个机械臂',
+      progress: 50,
+      nowUtc: '2026-09-29T16:00:00.000Z',
+      timezone: TZ,
+    })
+    const first = await createRecord({
+      userId: USER,
+      type: 'log',
+      content: '电机转起来了',
+      progress: 25,
+      parentId: project.id,
+      nowUtc: '2026-09-29T17:00:00.000Z',
+      timezone: TZ,
+    })
+    const second = await createRecord({
+      userId: USER,
+      type: 'log',
+      content: '限位搞定了',
+      progress: 50,
+      parentId: project.id,
+      nowUtc: '2026-09-29T18:00:00.000Z',
+      timezone: TZ,
+    })
+    return { projectId: project.id, logs: [first.id, second.id] }
+  }
+
+  it('创建进展：type / content / progress / parentId 都落库', async () => {
+    const { projectId } = await setupProject()
+
+    const logs = await db.records.where('type').equals('log').toArray()
+    expect(logs).toHaveLength(2)
+    for (const log of logs) {
+      expect(log.type).toBe('log')
+      expect(log.parentId).toBe(projectId)
+      expect(log.deletedAtUtc).toBeNull()
+    }
+  })
+
+  it('★ payload 里真的带着 parentId 与 progress —— 漏了就是「本机有、别的设备没有」', async () => {
+    // 这一环最容易漏：库里写对了、但 mutation 的 payload 没带上，
+    // 推送出去后端收不到，本机看着好好的、另一台设备拉下来是空的，
+    // 而且**不报任何错**。和大事那次是同一个坑。
+    const project = await createRecord({
+      userId: USER,
+      type: 'project',
+      content: '大事',
+      nowUtc: '2026-09-29T16:00:00.000Z',
+      timezone: TZ,
+    })
+    await createRecord({
+      userId: USER,
+      type: 'log',
+      content: '第一步',
+      progress: 40,
+      parentId: project.id,
+      nowUtc: '2026-09-29T17:00:00.000Z',
+      timezone: TZ,
+    })
+
+    const pending = await listAllPending(USER)
+    const logMutation = pending.find((m) => m.payload.type === 'log')
+    expect(logMutation).toBeDefined()
+    expect(logMutation?.operation).toBe('create')
+    expect(logMutation?.payload.parentId).toBe(project.id)
+    expect(logMutation?.payload.progress).toBe(40)
+  })
+
+  it('进展没传进度时是 null，不是 0 —— 「没记」和「记了 0%」是两回事', async () => {
+    const project = await createRecord({
+      userId: USER,
+      type: 'project',
+      content: '大事',
+      nowUtc: '2026-09-29T16:00:00.000Z',
+      timezone: TZ,
+    })
+    const log = await createRecord({
+      userId: USER,
+      type: 'log',
+      content: '随手写一句',
+      parentId: project.id,
+      nowUtc: '2026-09-29T17:00:00.000Z',
+      timezone: TZ,
+    })
+
+    expect(log.progress).toBeNull()
+  })
+
+  it('非 log 即使传了 parentId 也一律丢弃', async () => {
+    const project = await createRecord({
+      userId: USER,
+      type: 'project',
+      content: '大事',
+      nowUtc: '2026-09-29T16:00:00.000Z',
+      timezone: TZ,
+    })
+    const todo = await createRecord({
+      userId: USER,
+      type: 'todo',
+      content: '买螺丝刀',
+      parentId: project.id,
+      nowUtc: '2026-09-29T17:00:00.000Z',
+      timezone: TZ,
+    })
+
+    expect(todo.parentId).toBeNull()
+  })
+
+  it('★ 进展不进首页时间线 —— 漏了这一条，首页会被进展刷屏', async () => {
+    await setupProject()
+
+    const all = await db.records.toArray()
+    expect(all).toHaveLength(3) // 1 件大事 + 2 条进展
+    // 时间线上只有那件大事
+    expect(all.filter(isOnTimeline).map((r) => r.content)).toEqual(['做一个机械臂'])
+  })
+
+  it('★ 进展也不进「待办已完成」区 / 灵感页 / 大事模块（各过滤器都挡得住）', async () => {
+    await setupProject()
+    const all = await db.records.toArray()
+
+    expect(all.filter(isOpenTodo)).toHaveLength(0)
+    expect(all.filter(isDoneTodo)).toHaveLength(0)
+    expect(all.filter(isOpenProject)).toHaveLength(1)
+  })
+
+  it('isLogOf 只认自己那件大事下的进展', async () => {
+    const { projectId } = await setupProject()
+    const other = await createRecord({
+      userId: USER,
+      type: 'project',
+      content: '另一件大事',
+      nowUtc: '2026-09-29T16:30:00.000Z',
+      timezone: TZ,
+    })
+
+    const all = await db.records.toArray()
+    expect(all.filter((r) => isLogOf(r, projectId))).toHaveLength(2)
+    expect(all.filter((r) => isLogOf(r, other.id))).toHaveLength(0)
+  })
+
+  it('进展能改内容，也能软删除 + 恢复（复用同一条撤销链路）', async () => {
+    const { logs } = await setupProject()
+    const logId = logs[0]
+    if (!logId) throw new Error('setupProject 没造出进展')
+
+    await updateContent(logId, '电机转起来了，但有点抖', '2026-09-29T19:00:00.000Z', TZ)
+    expect((await db.records.get(logId))?.content).toBe('电机转起来了，但有点抖')
+
+    await softDelete(logId, '2026-09-29T20:00:00.000Z')
+    expect((await db.records.get(logId))?.deletedAtUtc).not.toBeNull()
+    expect((await db.records.get(logId))?.content).toBe('电机转起来了，但有点抖')
+
+    await restoreRecord(logId, '2026-09-29T21:00:00.000Z', TZ)
+    expect((await db.records.get(logId))?.deletedAtUtc).toBeNull()
+  })
+
+  it('删掉父级大事不会连坐进展 —— 撤销之后写过的进展要原样回来', async () => {
+    const { projectId } = await setupProject()
+    await softDelete(projectId, '2026-09-29T22:00:00.000Z')
+
+    const logs = await db.records.where('type').equals('log').toArray()
+    expect(logs).toHaveLength(2)
+    for (const log of logs) expect(log.deletedAtUtc).toBeNull()
+  })
+
+  it('离线也能写进展，刷新后还在', async () => {
+    await setupProject()
+    await reopenDevice(device)
+
+    const logs = await db.records.where('type').equals('log').toArray()
+    expect(logs).toHaveLength(2)
+    // 两边都排序再比 —— 中文的默认排序规则不该成为这个用例的考点
+    expect(logs.map((l) => l.content).toSorted()).toEqual(
+      ['限位搞定了', '电机转起来了'].toSorted(),
+    )
   })
 })

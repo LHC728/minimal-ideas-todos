@@ -1,0 +1,213 @@
+import { useState } from 'react'
+import { recordActions, useLogs } from '../hooks/useRecords'
+import { useTodayLocalDate } from '../hooks/useToday'
+import { progressOf, type LocalRecord } from '../domain/record'
+import { deviceTimeZone, formatRelativeStamp } from '../utils/time'
+import { toaster } from '../app/toastStore'
+
+/**
+ * 大事详情里的「进展记录」。
+ *
+ * 回答的是进度条回答不了的问题：**具体做到哪一步了**。
+ * 进度条说「60%」，这里说「60% · 限位搞定了，卡在电机异响」——
+ * 过两周回头看，只有后者能让你想起当时的状态。
+ *
+ * 三条已定的设计：
+ *   1. 最新在最上 —— 打开详情第一眼要看到「现在到哪了」
+ *   2. 能改能删 —— 删错了有常驻撤销（和打勾、删除同一条规矩）
+ *   3. 每条顺手记下当时的进度 —— 显示成「50% · 限位搞定了」
+ *
+ * 进展是 Record(type = 'log')，**不会出现在首页时间线 / 日历 / 搜索**里，
+ * 只在这个面板里看得到。
+ */
+export function ProjectLogs({ project }: { project: LocalRecord }) {
+  const logs = useLogs(project.userId, project.id)
+  const today = useTodayLocalDate(deviceTimeZone())
+
+  const [draft, setDraft] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  // 新进展记的是**当前**进度快照。项目进度恒有值（新建时就是 0），
+  // 所以这里不需要判空。
+  const currentPercent = progressOf(project)
+  const canSubmit = draft.trim().length > 0 && !busy
+
+  async function submit(): Promise<void> {
+    const text = draft.trim()
+    if (!text || busy) return
+    setBusy(true)
+    try {
+      await recordActions.createLog(project.userId, project.id, text, currentPercent)
+      setDraft('')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mt-4 rounded-[12px] border border-line px-3 py-3" data-testid="project-logs">
+      <div className="flex items-baseline gap-2">
+        <span className="text-[12.5px] text-ink-soft">进展记录</span>
+        <span className="text-[12px] tabular-nums text-ink-soft" data-testid="project-logs-count">
+          {logs.length} 条
+        </span>
+      </div>
+
+      <div className="mt-2 flex items-center gap-2">
+        <input
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') void submit()
+          }}
+          placeholder="写到哪一步了？"
+          aria-label="进展内容"
+          data-testid="project-log-input"
+          // 16px 是刻意保留的：iOS Safari 在字号小于 16px 时会自动放大页面
+          className="h-10 min-w-0 flex-1 rounded-[10px] border border-line bg-canvas px-2.5 text-[16px] text-ink outline-none placeholder:text-ink-soft focus:border-project/50"
+        />
+        <button
+          type="button"
+          disabled={!canSubmit}
+          onClick={() => void submit()}
+          data-testid="project-log-save"
+          className="tap tap-active h-10 shrink-0 rounded-[10px] bg-project px-4 text-[14px] font-medium text-on-project disabled:bg-sunken disabled:text-ink-soft"
+        >
+          记下来
+        </button>
+      </div>
+
+      <p className="mt-1.5 text-[11.5px] leading-4 text-ink-soft">
+        会顺手记下当前进度 {currentPercent}%
+      </p>
+
+      {logs.length === 0 ? (
+        <p className="py-4 text-center text-[12px] leading-5 text-ink-soft" data-testid="project-logs-empty">
+          还没有进展。
+          <br />
+          写下「做到哪一步了」，回头看就知道当时卡在哪。
+        </p>
+      ) : (
+        <ul className="mt-3">
+          {logs.map((log) => (
+            <li key={log.id}>
+              <LogRow log={log} today={today} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+/**
+ * 一条进展。点一下就地变成编辑框（和详情正文同一套交互），
+ * 编辑框里有删除 —— 删除按钮只在编辑态出现，避免在手机上
+ * 让一行里挤两个可点区域、误触到删。
+ */
+function LogRow({ log, today }: { log: LocalRecord; today: string }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(log.content)
+  const [saving, setSaving] = useState(false)
+
+  // 进度是「写下这条时的快照」，可能没有（老数据 / 未记录）
+  const percent = log.progress
+  const stamp = formatRelativeStamp(log.createdAtUtc, today, log.createdTimezone)
+
+  async function save(): Promise<void> {
+    const text = draft.trim()
+    if (text === log.content) {
+      setEditing(false)
+      return
+    }
+    setSaving(true)
+    try {
+      await recordActions.updateContent(log.id, text)
+      setEditing(false)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function remove(): Promise<void> {
+    const id = log.id
+    await recordActions.remove(id)
+    toaster.show({
+      message: '已删除这条进展',
+      actionLabel: '撤销',
+      onAction: () => {
+        void recordActions.restore(id)
+      },
+    })
+  }
+
+  if (editing) {
+    return (
+      <div className="rounded-[10px] bg-sunken px-2.5 py-2" data-testid="project-log-editor">
+        <textarea
+          value={draft}
+          autoFocus
+          rows={2}
+          onChange={(event) => setDraft(event.target.value)}
+          aria-label="进展内容"
+          data-testid="project-log-editor-input"
+          className="w-full resize-none rounded-[8px] border border-line bg-canvas px-2.5 py-2 text-[15px] leading-[1.5] text-ink outline-none focus:border-project/50"
+        />
+        <div className="mt-2 flex items-center gap-2">
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => void save()}
+            data-testid="project-log-editor-save"
+            className="tap tap-active h-9 rounded-[9px] bg-project px-3.5 text-[13px] font-medium text-on-project disabled:opacity-50"
+          >
+            保存
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setDraft(log.content)
+              setEditing(false)
+            }}
+            data-testid="project-log-editor-cancel"
+            className="tap tap-active h-9 rounded-[9px] px-3 text-[13px] text-ink-soft"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={() => void remove()}
+            data-testid="project-log-delete"
+            className="tap tap-active ml-auto h-9 rounded-[9px] px-3 text-[13px] text-danger"
+          >
+            删除
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        setDraft(log.content)
+        setEditing(true)
+      }}
+      data-testid="project-log-row"
+      className="tap tap-active block w-full rounded-[10px] px-2 py-2 text-left"
+    >
+      <span className="flex items-baseline gap-2">
+        {percent === null ? null : (
+          <span className="shrink-0 text-[11.5px] tabular-nums text-project">{percent}%</span>
+        )}
+        <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[14px] leading-[1.5] text-ink">
+          {log.content || <span className="text-ink-soft">（空）</span>}
+        </span>
+      </span>
+      <span className="mt-0.5 block text-[11.5px] leading-4 text-ink-soft" data-testid="project-log-stamp">
+        {stamp}
+      </span>
+    </button>
+  )
+}

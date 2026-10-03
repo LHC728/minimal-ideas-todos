@@ -264,6 +264,32 @@ export function relativeDayLabel(localDate: string, tz?: string | null): string 
 }
 
 /**
+ * 「今天 21:30」/「昨天 09:12」/「9月28日 09:10」。
+ *
+ * `today` 由调用方传入，与 deadlineCountdown 同一套约定 ——
+ * 不在函数内部自己取当前时间：既保证它是纯函数（可测），也避免同一个
+ * 页面里出现两个不同的「今天」（那种 bug 极难复现）。
+ *
+ * 时刻无法解析时返回空字符串 —— 宁可不显示，也不显示一个错的时间。
+ */
+export function formatRelativeStamp(iso: string, today: string, tz?: string | null): string {
+  const date = localDateOf(iso, tz)
+  if (!date) return ''
+  const hm = formatHm(iso, tz)
+  // today 非法时 addDays 会原样返回它，于是两个比较都不成立，
+  // 直接落到 formatMonthDay —— 不会凭空说成「昨天」。
+  const day =
+    date === today
+      ? '今天'
+      : date === addDays(today, -1)
+        ? '昨天'
+        : date === addDays(today, -2)
+          ? '前天'
+          : formatMonthDay(date)
+  return hm === '' ? day : `${day} ${hm}`
+}
+
+/**
  * 「今天 14:32 完成」/「9月28日 09:10 完成」。
  *
  * 待办页「已完成」区专用：那里显示的是**完成时刻**，不是创建时刻，

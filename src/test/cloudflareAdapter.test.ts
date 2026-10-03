@@ -120,6 +120,7 @@ describe('pullAll 的字段归一', () => {
           content: '毕业论文',
           progress: 40,
           deadlineLocalDate: '2026-10-12',
+          parentId: null,
           createdAtUtc: '2026-09-30T01:00:00.000Z',
           createdTimezone: 'Asia/Shanghai',
           createdLocalDate: '2026-09-30',
@@ -142,6 +143,7 @@ describe('pullAll 的字段归一', () => {
         content: '毕业论文',
         progress: 40,
         deadlineLocalDate: '2026-10-12',
+        parentId: null,
         createdAtUtc: '2026-09-30T01:00:00.000Z',
         createdTimezone: 'Asia/Shanghai',
         createdLocalDate: '2026-09-30',
@@ -156,15 +158,30 @@ describe('pullAll 的字段归一', () => {
     ])
   })
 
-  it('缺字段的老记录：进度与截止日补成 null，不是 undefined', async () => {
+  it('缺字段的老记录：进度、截止日、parentId 补成 null，不是 undefined', async () => {
     // 关键：必须是 null 而不是 undefined。
     // snapshotEquals 用的是严格相等，undefined ≠ null 会在下一次同步时
-    // 凭空造出一个「删除冲突」弹窗（Dexie v2 迁移存在的全部理由）。
+    // 凭空造出一个「删除冲突」弹窗（Dexie v2 / v3 迁移存在的全部理由）。
     stubFetch({ records: [{ id: 'r-1', type: 'idea', version: 1 }] })
     const [record] = await adapter.pullAll('user-a')
     expect(record?.progress).toBeNull()
     expect(record?.deadlineLocalDate).toBeNull()
+    expect(record?.parentId).toBeNull()
     expect(record?.progress).not.toBeUndefined()
+  })
+
+  it('进展：parentId 原样透出，空字符串当「没有父级」', async () => {
+    stubFetch({
+      records: [
+        { id: 'r-log', type: 'log', version: 1, progress: 50, parentId: 'p-1' },
+        { id: 'r-bad', type: 'log', version: 1, parentId: '' },
+      ],
+    })
+    const [log, bad] = await adapter.pullAll('user-a')
+    expect(log?.type).toBe('log')
+    expect(log?.progress).toBe(50)
+    expect(log?.parentId).toBe('p-1')
+    expect(bad?.parentId).toBeNull()
   })
 
   it('越界的进度与畸形的截止日在入口被收敛掉', async () => {

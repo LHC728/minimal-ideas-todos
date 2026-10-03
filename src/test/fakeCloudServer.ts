@@ -13,7 +13,7 @@ import type {
   CloudAdapter,
 } from '../cloud/CloudAdapter'
 import type { CloudRecord, RecordType } from '../domain/record'
-import { clampDeadlineLocalDate, clampProgress, clampRecordType } from '../domain/record'
+import { clampDeadlineLocalDate, clampParentId, clampProgress, clampRecordType } from '../domain/record'
 import { AppDatabase, setActiveDatabase } from '../db/db'
 
 export class FakeCloudServer implements CloudAdapter {
@@ -168,15 +168,18 @@ export class FakeCloudServer implements CloudAdapter {
   private buildFromCreate(userId: string, params: ApplyMutationParams): CloudRecord {
     const p = params.payload as Record<string, unknown>
     const type: RecordType = clampRecordType(p.type)
-    // 与真实后端一致：非大事的 progress / deadline 一律丢弃
+    // 与真实后端一致：只有大事和进展才接受 progress；只有大事才接受 deadline；
+    // 只有进展才接受 parentId。其余一律丢弃（数据库层也有 CHECK 钉着）。
     const isProject = type === 'project'
+    const isLog = type === 'log'
     return {
       id: params.recordId,
       userId,
       type,
       content: typeof p.content === 'string' ? p.content : '',
-      progress: isProject ? clampProgress(p.progress) : null,
+      progress: isProject || isLog ? clampProgress(p.progress) : null,
       deadlineLocalDate: isProject ? clampDeadlineLocalDate(p.deadlineLocalDate) : null,
+      parentId: isLog ? clampParentId(p.parentId) : null,
       createdAtUtc: String(p.createdAtUtc ?? this.now()),
       createdTimezone: String(p.createdTimezone ?? 'Asia/Shanghai'),
       createdLocalDate: String(p.createdLocalDate ?? '2026-09-30'),
@@ -193,10 +196,11 @@ export class FakeCloudServer implements CloudAdapter {
   private applyPatch(row: CloudRecord, payload: Record<string, unknown>): CloudRecord {
     const next: CloudRecord = { ...row }
     if (typeof payload.content === 'string') next.content = payload.content
-    // 与真实后端一致：只有大事才接受 progress / deadline
-    if (row.type === 'project') {
+    // 与真实后端一致：只有大事 / 进展才接受 progress，只有大事才接受 deadline。
+    // parentId 不在这里处理 —— 服务端把它当不可变字段，更新路径根本不看它。
+    if (row.type === 'project' || row.type === 'log') {
       if ('progress' in payload) next.progress = clampProgress(payload.progress)
-      if ('deadlineLocalDate' in payload) {
+      if (row.type === 'project' && 'deadlineLocalDate' in payload) {
         next.deadlineLocalDate = clampDeadlineLocalDate(payload.deadlineLocalDate)
       }
     }

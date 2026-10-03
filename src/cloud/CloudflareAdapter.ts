@@ -8,7 +8,7 @@
  *      正确性由 Pull → Reconcile → Push → Pull 的同步循环保证。
  */
 import type { CloudRecord, RecordType } from '../domain/record'
-import { clampDeadlineLocalDate, clampProgress, clampRecordType } from '../domain/record'
+import { clampDeadlineLocalDate, clampParentId, clampProgress, clampRecordType } from '../domain/record'
 import type { ApplyMutationParams, ApplyMutationResult, CloudAdapter } from './CloudAdapter'
 import { cfRequest, getCloudflareClient } from './cloudflareClient'
 
@@ -35,6 +35,7 @@ function toCloud(row: Row): CloudRecord {
     content: asString(row.content),
     progress: clampProgress(row.progress),
     deadlineLocalDate: clampDeadlineLocalDate(row.deadlineLocalDate),
+    parentId: clampParentId(row.parentId),
     createdAtUtc: asString(row.createdAtUtc),
     createdTimezone: asString(row.createdTimezone, 'UTC'),
     createdLocalDate: asString(row.createdLocalDate),

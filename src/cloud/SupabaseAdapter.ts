@@ -6,7 +6,7 @@
  *   「检查 version → 应用 mutation → version + 1 → 记录 applied_mutations」
  */
 import type { CloudRecord, RecordType } from '../domain/record'
-import { clampDeadlineLocalDate, clampProgress, clampRecordType } from '../domain/record'
+import { clampDeadlineLocalDate, clampParentId, clampProgress, clampRecordType } from '../domain/record'
 import type {
   ApplyMutationParams,
   ApplyMutationResult,
@@ -54,6 +54,7 @@ function toCloud(row: Row): CloudRecord {
     content: asString(row.content),
     progress: clampProgress(row.progress),
     deadlineLocalDate: clampDeadlineLocalDate(row.deadline_local_date),
+    parentId: clampParentId(row.parent_id),
     createdAtUtc: asString(row.created_at_utc),
     createdTimezone: asString(row.created_timezone, 'UTC'),
     createdLocalDate: asString(row.created_local_date),

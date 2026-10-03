@@ -15,6 +15,7 @@ import {
   formatDoneStamp,
   formatHm,
   formatMonthDay,
+  formatRelativeStamp,
   formatWeekday,
   localDateOf,
   monthGrid,
@@ -278,5 +279,35 @@ describe('大事截止日倒计时', () => {
       expect(deadlineCountdown(bad, '2026-09-30')).toBeNull()
     }
     expect(deadlineCountdown('2026-10-05', 'bad')).toBeNull()
+  })
+})
+
+describe('进展记录的时间戳（今天 21:30 / 昨天 09:12）', () => {
+  const TZ = 'Asia/Shanghai'
+
+  it('今天 / 昨天 / 前天用相对词，更早的用月日', () => {
+    // 上海时间：2026-09-30 21:30 = UTC 13:30
+    expect(formatRelativeStamp('2026-09-30T13:30:00.000Z', '2026-09-30', TZ)).toBe('今天 21:30')
+    expect(formatRelativeStamp('2026-09-29T01:12:00.000Z', '2026-09-30', TZ)).toBe('昨天 09:12')
+    expect(formatRelativeStamp('2026-09-28T01:12:00.000Z', '2026-09-30', TZ)).toBe('前天 09:12')
+    expect(formatRelativeStamp('2026-09-20T01:12:00.000Z', '2026-09-30', TZ)).toBe('9月20日 09:12')
+  })
+
+  it('★ today 由调用方传入，不自己取当前时间 —— 同一个页面只有一个「今天」', () => {
+    // 同一个时刻，站在不同的「今天」看，标签必须不同
+    const iso = '2026-09-29T01:12:00.000Z'
+    expect(formatRelativeStamp(iso, '2026-09-30', TZ)).toBe('昨天 09:12')
+    expect(formatRelativeStamp(iso, '2026-09-29', TZ)).toBe('今天 09:12')
+  })
+
+  it('时刻解析不出来时返回空字符串，绝不显示假时间', () => {
+    for (const bad of ['', 'bad', 'not-a-date']) {
+      expect(formatRelativeStamp(bad, '2026-09-30', TZ)).toBe('')
+    }
+  })
+
+  it('today 非法时不会把任意日期说成「昨天」', () => {
+    // addDays 在 today 非法时原样返回它，所以两个相对判断都不成立
+    expect(formatRelativeStamp('2026-09-29T01:12:00.000Z', 'bad', TZ)).toBe('9月29日 09:12')
   })
 })

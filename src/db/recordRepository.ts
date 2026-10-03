@@ -16,7 +16,7 @@ import type {
   RecordType,
   SyncState,
 } from '../domain/record'
-import { snapshotOf, clampDeadlineLocalDate, clampProgress, PROGRESS_MIN } from '../domain/record'
+import { snapshotOf, clampDeadlineLocalDate, clampParentId, clampProgress, PROGRESS_MIN } from '../domain/record'
 import type { Mutation, MutationOperation, MutationPayload } from '../domain/mutation'
 import { uuidv4 } from '../utils/id'
 import { captureNow } from '../utils/timezone'
@@ -28,10 +28,12 @@ export interface CreateRecordInput {
   userId: string
   type: RecordType
   content: string
-  /** 大事的初始进度，默认 0；非大事忽略 */
-  progress?: number
+  /** 大事的初始进度，默认 0；进展传 null 表示「这条不记进度」；其余忽略 */
+  progress?: number | null
   /** 大事的截止日 `YYYY-MM-DD`；非大事忽略 */
   deadlineLocalDate?: string | null
+  /** 进展所属的大事 id；只有 type = 'log' 才生效，其余忽略 */
+  parentId?: string | null
   /** 用于测试注入；默认取当前时刻 */
   nowUtc?: string
   timezone?: string | null
@@ -50,11 +52,24 @@ export async function createRecord(input: CreateRecordInput): Promise<LocalRecor
   const captured = captureNow(input.nowUtc, input.timezone)
   const content = input.content.trim()
 
-  // 只有大事才有进度和截止日。灵感 / 待办即使调用方传了值也一律丢弃 ——
-  // 「灵感有 30% 进度」是没有意义的，让它落库只会在以后到处长出分支。
+  // 哪些字段对哪种类型有意义，全部在这里一次性裁决：
+  //   进度   → 大事、进展（进展记的是「写下这条时的进度」，是快照）
+  //   截止日 → 只有大事
+  //   parentId → 只有进展
+  // 其余组合即使调用方传了值也一律丢弃 —— 「灵感有 30% 进度」是没有意义的，
+  // 让它落库只会在以后到处长出分支（数据库层也用 CHECK 钉住了同一件事）。
   const isProject = input.type === 'project'
-  const progress = isProject ? (clampProgress(input.progress ?? PROGRESS_MIN) ?? PROGRESS_MIN) : null
+  const isLog = input.type === 'log'
+
+  // 大事没传进度时默认 0（新建就是「还没开始」）；
+  // 进展没传时保持 null —— 「这条进展没记进度」和「记了 0%」是两回事。
+  const progress = isProject
+    ? (clampProgress(input.progress ?? PROGRESS_MIN) ?? PROGRESS_MIN)
+    : isLog
+      ? clampProgress(input.progress)
+      : null
   const deadlineLocalDate = isProject ? clampDeadlineLocalDate(input.deadlineLocalDate) : null
+  const parentId = isLog ? clampParentId(input.parentId) : null
 
   const record: LocalRecord = {
     id: uuidv4(),
@@ -63,6 +78,7 @@ export async function createRecord(input: CreateRecordInput): Promise<LocalRecor
     content,
     progress,
     deadlineLocalDate,
+    parentId,
     createdAtUtc: captured.utc,
     createdTimezone: captured.timezone,
     createdLocalDate: captured.localDate,
@@ -87,6 +103,7 @@ export async function createRecord(input: CreateRecordInput): Promise<LocalRecor
       content: record.content,
       progress: record.progress,
       deadlineLocalDate: record.deadlineLocalDate,
+      parentId: record.parentId,
       createdAtUtc: record.createdAtUtc,
       createdTimezone: record.createdTimezone,
       createdLocalDate: record.createdLocalDate,
@@ -303,6 +320,7 @@ function fromCloud(cloud: CloudRecord, syncState: SyncState): LocalRecord {
     // 也可能存着越界的脏值。统一在这里收敛，别让脏数据进到领域模型。
     progress: clampProgress(cloud.progress),
     deadlineLocalDate: clampDeadlineLocalDate(cloud.deadlineLocalDate),
+    parentId: clampParentId(cloud.parentId),
     createdAtUtc: cloud.createdAtUtc,
     createdTimezone: cloud.createdTimezone,
     createdLocalDate: cloud.createdLocalDate,
@@ -361,6 +379,7 @@ export async function replaceWithSnapshot(
     record.content = snapshot.content
     record.progress = snapshot.progress
     record.deadlineLocalDate = snapshot.deadlineLocalDate
+    record.parentId = snapshot.parentId
     record.createdAtUtc = snapshot.createdAtUtc
     record.createdTimezone = snapshot.createdTimezone
     record.createdLocalDate = snapshot.createdLocalDate
@@ -420,6 +439,7 @@ export async function migrateLocalRecordsToUser(targetUserId: string): Promise<n
           content: next.content,
           progress: next.progress,
           deadlineLocalDate: next.deadlineLocalDate,
+          parentId: next.parentId,
           createdAtUtc: next.createdAtUtc,
           createdTimezone: next.createdTimezone,
           createdLocalDate: next.createdLocalDate,

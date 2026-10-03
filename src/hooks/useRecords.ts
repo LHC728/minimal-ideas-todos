@@ -24,6 +24,7 @@ import {
   byDeadlineAsc,
   isDoneTodo,
   isIdea,
+  isLogOf,
   isOnTimeline,
   isOpenProject,
   isOpenTodo,
@@ -92,19 +93,58 @@ export function useOpenProjects(userId: string | null): LocalRecord[] {
   return records.filter(isOpenProject).toSorted(byDeadlineAsc)
 }
 
-/** 日历归档：按 created_local_date（§23、§24、§80） */
+/**
+ * 某件大事下的进展记录，**最新在最上面**。
+ *
+ * 倒序是刻意的：打开详情时第一眼要看到的是「现在到哪了」，
+ * 而不是「最开始写了什么」。
+ *
+ * 父级被删掉时进展不跟着消失（各自的 deletedAtUtc 独立），
+ * 所以这里只按 isLogOf 过滤，不关心父级还在不在 ——
+ * 撤销「删除大事」之后写过的进展要原样回来。
+ */
+export function useLogs(userId: string | null, projectId: string | null): LocalRecord[] {
+  const records = useAllRecords(userId)
+  if (!projectId) return EMPTY
+  return records.filter((record) => isLogOf(record, projectId)).toSorted(byCreatedAtDesc)
+}
+
+/**
+ * 每件大事下有多少条进展：`Map<大事 id, 条数>`。
+ *
+ * 一次遍历算出全部，而不是每行调一次 hook —— 首页模块里可能有十几件大事，
+ * 那样就是十几个 liveQuery 订阅，每写一条记录全部重算一遍。
+ */
+export function useLogCounts(userId: string | null): Map<string, number> {
+  const records = useAllRecords(userId)
+  const counts = new Map<string, number>()
+  for (const record of records) {
+    if (record.deletedAtUtc !== null || record.type !== 'log') continue
+    if (record.parentId === null) continue
+    counts.set(record.parentId, (counts.get(record.parentId) ?? 0) + 1)
+  }
+  return counts
+}
+
+/**
+ * 日历归档：按 created_local_date（§23、§24、§80）。
+ *
+ * 走 isOnTimeline 而不是自己写 `deletedAtUtc === null` ——
+ * 那样会把进展也列进来，日历上就会冒出「9月30日 · 限位搞定了」这种
+ * 没有上下文的碎片。过滤规则只留一处，加新类型时才不会漏。
+ */
 export function useRecordsOnDate(userId: string | null, localDate: string | null): LocalRecord[] {
   const records = useAllRecords(userId)
   if (!localDate) return EMPTY
-  return sortDesc(records.filter((r) => r.deletedAtUtc === null && r.createdLocalDate === localDate))
+  return sortDesc(records.filter((r) => isOnTimeline(r) && r.createdLocalDate === localDate))
 }
 
-/** 有记录的日期集合，用于月历小圆点 */
+/** 有记录的日期集合，用于月历小圆点（同样排除进展） */
 export function useRecordDates(userId: string | null): Set<string> {
   const records = useAllRecords(userId)
   const dates = new Set<string>()
   for (const record of records) {
-    if (record.deletedAtUtc === null) dates.add(record.createdLocalDate)
+    if (isOnTimeline(record)) dates.add(record.createdLocalDate)
   }
   return dates
 }
@@ -191,6 +231,29 @@ export const recordActions = {
   async setDeadline(recordId: string, deadlineLocalDate: string | null): Promise<void> {
     await updateDeadline(recordId, deadlineLocalDate)
     await afterWrite()
+  },
+
+  /**
+   * 给某件大事记一条进展。
+   *
+   * progress 是「写下这条时的进度」**快照**，不是去改大事的进度 ——
+   * 所以这里不会碰大事那条记录。传 null 表示这条不记进度。
+   */
+  async createLog(
+    userId: string,
+    projectId: string,
+    content: string,
+    progress: number | null,
+  ): Promise<LocalRecord> {
+    const record = await createRecord({
+      userId,
+      type: 'log',
+      content,
+      parentId: projectId,
+      progress,
+    })
+    await afterWrite()
+    return record
   },
 
   async complete(recordId: string): Promise<void> {

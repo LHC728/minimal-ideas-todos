@@ -24,6 +24,8 @@ export interface MutationPayload {
   progress?: number | null
   /** 大事截止日 `YYYY-MM-DD`；`null` 表示显式清空 */
   deadlineLocalDate?: string | null
+  /** 进展所属大事的 id；只有 create 会带（服务端把它当不可变字段） */
+  parentId?: string | null
   createdAtUtc?: string
   createdTimezone?: string
   createdLocalDate?: string

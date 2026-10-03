@@ -87,6 +87,12 @@ export function threeWayMerge(
   autoMerged.createdTimezone = base.createdTimezone
   autoMerged.createdLocalDate = base.createdLocalDate
 
+  // parentId 同理：进展「属于哪件大事」是写下的那一刻就定死的，之后不会变。
+  // 既然两端都不该改它，就不把它放进 MergeField —— 放进去了反而要在冲突
+  // 弹窗里多一个用户根本无从判断的选项（「这条进展该挂在哪件大事下？」）。
+  // 跟随 base 在任何情况下都不会丢数据。
+  autoMerged.parentId = base.parentId
+
   // ---- content ----
   {
     const localChanged = local.content !== base.content
