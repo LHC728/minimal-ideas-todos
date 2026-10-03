@@ -49,6 +49,8 @@ export interface RecordRow {
   user_id: string
   type: string
   content: string
+  progress: number | null
+  deadline_local_date: string | null
   created_at_utc: string
   created_timezone: string
   created_local_date: string
@@ -67,8 +69,10 @@ export interface RecordRow {
 export interface CloudRecordOut {
   id: string
   userId: string
-  type: 'idea' | 'todo'
+  type: 'idea' | 'todo' | 'project'
   content: string
+  progress: number | null
+  deadlineLocalDate: string | null
   createdAtUtc: string
   createdTimezone: string
   createdLocalDate: string
@@ -81,12 +85,65 @@ export interface CloudRecordOut {
   serverUpdatedAt: string
 }
 
+/** 只认三种类型，其余一律降级成 idea —— 与客户端 clampRecordType 同一套语义 */
+function asType(value: unknown): 'idea' | 'todo' | 'project' {
+  if (value === 'todo' || value === 'project') return value
+  return 'idea'
+}
+
+/**
+ * 进度归一：夹到 0–100 的整数，非法值当 null。
+ *
+ * 与客户端 `clampProgress` 是同一套规则，故意抄了一份而不是共享 ——
+ * worker 有独立的 tsconfig，不引 src/ 下的任何东西（那边带 DOM lib）。
+ * 改这里时记得同步改 `src/domain/record.ts`。
+ */
+function asProgress(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const num = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(num)) return null
+  return Math.min(100, Math.max(0, Math.round(num)))
+}
+
+const LOCAL_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/
+
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0 ? 29 : 28
+  return [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1] ?? 0
+}
+
+/**
+ * 截止日归一：必须是**真实存在的日历日**，否则当没有。
+ *
+ * ⚠️ 只测格式（`\d{4}-\d{2}-\d{2}`）是不够的 —— `2026-13-45` 和
+ * `2026-02-30` 都完全符合那个正则，但它们不是日期。放出去以后客户端
+ * 会算出一个荒谬的倒计时，或者渲染出不存在的「13月45日」。
+ * 所以这里做的是与客户端 `parseLocalDate` 完全相同的日历校验（含闰年），
+ * 故意抄一份而不是共享 —— worker 有独立 tsconfig，不引 src/ 下的任何东西。
+ * 改这里时记得同步改 `src/domain/record.ts` 的 `clampDeadlineLocalDate`。
+ */
+function asDeadline(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const match = LOCAL_DATE_PATTERN.exec(value)
+  if (!match) return null
+  const [, rawYear, rawMonth, rawDay] = match
+  if (rawYear === undefined || rawMonth === undefined || rawDay === undefined) return null
+  const year = Number(rawYear)
+  const month = Number(rawMonth)
+  const day = Number(rawDay)
+  if (month < 1 || month > 12) return null
+  if (day < 1 || day > daysInMonth(year, month)) return null
+  return value
+}
+
 export function toCloudRecord(row: RecordRow): CloudRecordOut {
   return {
     id: row.id,
     userId: row.user_id,
-    type: row.type === 'todo' ? 'todo' : 'idea',
+    type: asType(row.type),
     content: row.content,
+    progress: asProgress(row.progress),
+    deadlineLocalDate: asDeadline(row.deadline_local_date),
     createdAtUtc: row.created_at_utc,
     createdTimezone: row.created_timezone,
     createdLocalDate: row.created_local_date,
@@ -105,6 +162,8 @@ const RECORD_COLUMNS = [
   'user_id',
   'type',
   'content',
+  'progress',
+  'deadline_local_date',
   'created_at_utc',
   'created_timezone',
   'created_local_date',
@@ -280,22 +339,31 @@ export async function applyMutation(
       return { status: 'record_not_found', version: null, record: null }
     }
 
+    const type = asType(str(payload, 'type'))
+    // 进度和截止日只属于大事。灵感 / 待办即使 payload 里带了也一律丢弃 ——
+    // 这与客户端 `createRecord` 的行为一致，也是数据库那条
+    // 「非 project 不许有 progress」CHECK 能一直成立的前提。
+    const isProject = type === 'project'
+
     const insertRecord = db
       .prepare(
         `insert into records (
            id, user_id, type, content,
+           progress, deadline_local_date,
            created_at_utc, created_timezone, created_local_date,
            updated_at_utc, updated_timezone,
            completed_at_utc, completed_timezone, deleted_at_utc,
            version, server_updated_at
-         ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+         ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
          on conflict (id) do nothing`,
       )
       .bind(
         recordId,
         userId,
-        strOr(payload, 'type', 'idea') === 'todo' ? 'todo' : 'idea',
+        type,
         strOr(payload, 'content', ''),
+        isProject ? asProgress(payload['progress']) : null,
+        isProject ? asDeadline(payload['deadlineLocalDate']) : null,
         str(payload, 'createdAtUtc') ?? now,
         str(payload, 'createdTimezone') ?? 'UTC',
         str(payload, 'createdLocalDate') ?? now.slice(0, 10),
@@ -336,6 +404,11 @@ export async function applyMutation(
     }
 
     const setContent = str(payload, 'content') !== null
+    // type 在数据库层是不可变的，所以用当前行的 type 判断即可 ——
+    // 非大事的 progress / deadline 一律当没传，保持与客户端同一套语义。
+    const isProject = current.type === 'project'
+    const setProgress = isProject && has(payload, 'progress')
+    const setDeadline = isProject && has(payload, 'deadlineLocalDate')
     const setUpdatedAt = str(payload, 'updatedAtUtc') !== null
     const setUpdatedTz = str(payload, 'updatedTimezone') !== null
     const setCompletedAt = has(payload, 'completedAtUtc')
@@ -350,6 +423,8 @@ export async function applyMutation(
       .prepare(
         `update records set
            content            = case when ? = 1 then ? else content end,
+           progress           = case when ? = 1 then ? else progress end,
+           deadline_local_date= case when ? = 1 then ? else deadline_local_date end,
            updated_at_utc     = case when ? = 1 then ? else updated_at_utc end,
            updated_timezone   = case when ? = 1 then ? else updated_timezone end,
            completed_at_utc   = case when ? = 1 then ? else completed_at_utc end,
@@ -362,6 +437,10 @@ export async function applyMutation(
       .bind(
         setContent ? 1 : 0,
         str(payload, 'content'),
+        setProgress ? 1 : 0,
+        asProgress(payload['progress']),
+        setDeadline ? 1 : 0,
+        asDeadline(payload['deadlineLocalDate']),
         setUpdatedAt ? 1 : 0,
         str(payload, 'updatedAtUtc'),
         setUpdatedTz ? 1 : 0,

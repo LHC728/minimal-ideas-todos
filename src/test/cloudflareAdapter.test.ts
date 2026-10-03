@@ -110,14 +110,16 @@ describe('请求怎么发出去', () => {
 })
 
 describe('pullAll 的字段归一', () => {
-  it('完整的一行原样映射', async () => {
+  it('完整的一行原样映射（含大事的进度与截止日）', async () => {
     stubFetch({
       records: [
         {
           id: 'r-1',
           userId: 'user-a',
-          type: 'todo',
-          content: '要做的事',
+          type: 'project',
+          content: '毕业论文',
+          progress: 40,
+          deadlineLocalDate: '2026-10-12',
           createdAtUtc: '2026-09-30T01:00:00.000Z',
           createdTimezone: 'Asia/Shanghai',
           createdLocalDate: '2026-09-30',
@@ -136,8 +138,10 @@ describe('pullAll 的字段归一', () => {
       {
         id: 'r-1',
         userId: 'user-a',
-        type: 'todo',
-        content: '要做的事',
+        type: 'project',
+        content: '毕业论文',
+        progress: 40,
+        deadlineLocalDate: '2026-10-12',
         createdAtUtc: '2026-09-30T01:00:00.000Z',
         createdTimezone: 'Asia/Shanghai',
         createdLocalDate: '2026-09-30',
@@ -150,6 +154,31 @@ describe('pullAll 的字段归一', () => {
         serverUpdatedAt: '2026-09-30T02:00:00.000Z',
       },
     ])
+  })
+
+  it('缺字段的老记录：进度与截止日补成 null，不是 undefined', async () => {
+    // 关键：必须是 null 而不是 undefined。
+    // snapshotEquals 用的是严格相等，undefined ≠ null 会在下一次同步时
+    // 凭空造出一个「删除冲突」弹窗（Dexie v2 迁移存在的全部理由）。
+    stubFetch({ records: [{ id: 'r-1', type: 'idea', version: 1 }] })
+    const [record] = await adapter.pullAll('user-a')
+    expect(record?.progress).toBeNull()
+    expect(record?.deadlineLocalDate).toBeNull()
+    expect(record?.progress).not.toBeUndefined()
+  })
+
+  it('越界的进度与畸形的截止日在入口被收敛掉', async () => {
+    stubFetch({
+      records: [
+        { id: 'r-1', type: 'project', version: 1, progress: 999, deadlineLocalDate: '2026-13-45' },
+        { id: 'r-2', type: 'project', version: 1, progress: 'abc', deadlineLocalDate: '' },
+      ],
+    })
+    const [first, second] = await adapter.pullAll('user-a')
+    expect(first?.progress).toBe(100) // 夹到 0–100
+    expect(first?.deadlineLocalDate).toBeNull() // 13 月 45 日不是真日期
+    expect(second?.progress).toBeNull()
+    expect(second?.deadlineLocalDate).toBeNull()
   })
 
   it('字段缺失 / 类型不对时不抛异常，而是给出安全值', async () => {

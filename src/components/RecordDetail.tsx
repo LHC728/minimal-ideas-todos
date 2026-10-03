@@ -6,6 +6,7 @@ import { recordActions, useRecord } from '../hooks/useRecords'
 import { formatChineseDateTime } from '../utils/time'
 import { toaster } from '../app/toastStore'
 import { Modal } from './Modal'
+import { ProjectEditor } from './ProjectEditor'
 
 interface RecordDetailProps {
   recordId: string | null
@@ -106,6 +107,8 @@ function RecordDetailBody({ recordId, onClose }: { recordId: string; onClose: ()
           {record.completedAtUtc ? '已完成' : '未完成'}
         </p>
       ) : null}
+
+      {record.type === 'project' ? <ProjectEditor record={record} /> : null}
 
       <dl className="mt-5 space-y-2 text-[13px] leading-5">
         <div className="flex gap-3">

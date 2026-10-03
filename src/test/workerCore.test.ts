@@ -172,6 +172,8 @@ describe('toCloudRecord 映射', () => {
       user_id: 'u-1',
       type: 'todo',
       content: '内容',
+      progress: null,
+      deadline_local_date: null,
       created_at_utc: T0,
       created_timezone: 'Asia/Shanghai',
       created_local_date: '2026-09-30',
@@ -188,6 +190,8 @@ describe('toCloudRecord 映射', () => {
       userId: 'u-1',
       type: 'todo',
       content: '内容',
+      progress: null,
+      deadlineLocalDate: null,
       createdAtUtc: T0,
       createdTimezone: 'Asia/Shanghai',
       createdLocalDate: '2026-09-30',
@@ -201,12 +205,39 @@ describe('toCloudRecord 映射', () => {
     })
   })
 
-  it('未知 type 一律归为 idea（客户端类型只有两种）', () => {
+  it('未知 type 一律归为 idea（客户端类型只有三种）', () => {
     const row = db.row<RecordRow>('select 1 as id') // 占位，仅借类型
     expect(row).not.toBeNull()
     expect(
       toCloudRecord({ ...(row as RecordRow), type: 'something-else', version: 1 }).type,
     ).toBe('idea')
+  })
+
+  it('project 类型与进度、截止日原样透出', () => {
+    const row = db.row<RecordRow>('select 1 as id')
+    const mapped = toCloudRecord({
+      ...(row as RecordRow),
+      type: 'project',
+      progress: 60,
+      deadline_local_date: '2026-10-12',
+      version: 1,
+    })
+    expect(mapped.type).toBe('project')
+    expect(mapped.progress).toBe(60)
+    expect(mapped.deadlineLocalDate).toBe('2026-10-12')
+  })
+
+  it('越界的进度与畸形的截止日在出口被收敛掉', () => {
+    const row = db.row<RecordRow>('select 1 as id')
+    const mapped = toCloudRecord({
+      ...(row as RecordRow),
+      type: 'project',
+      progress: 140,
+      deadline_local_date: '2026-13-45',
+      version: 1,
+    })
+    expect(mapped.progress).toBe(100)
+    expect(mapped.deadlineLocalDate).toBeNull()
   })
 })
 

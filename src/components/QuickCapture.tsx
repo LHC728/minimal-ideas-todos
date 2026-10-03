@@ -1,10 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import { recordActions } from '../hooks/useRecords'
-import type { RecordType } from '../domain/record'
 
 interface QuickCaptureProps {
   userId: string
 }
+
+/**
+ * 快车道只做两种记录，**刻意不含大事**。
+ *
+ * 大事要多填一个截止日，塞进来会让最常用的路径（记灵感 / 记待办）
+ * 多一个选择。大事有自己的入口 —— 首页那个「目前在做的大事」模块。
+ * 类型写窄成 `'idea' | 'todo'` 就是为了让这条边界在类型层面也成立。
+ */
+type QuickCaptureType = 'idea' | 'todo'
 
 /**
  * QuickCapture（方案 §8）。
@@ -43,7 +51,7 @@ export function QuickCapture({ userId }: QuickCaptureProps) {
     textareaRef.current?.focus()
   }, [])
 
-  async function submit(type: RecordType) {
+  async function submit(type: QuickCaptureType) {
     const content = value.trim()
     if (!content || busy) return
     setBusy(true)

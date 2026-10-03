@@ -1,11 +1,28 @@
 import { useState } from 'react'
 import { recordActions, useConflicts } from '../hooks/useRecords'
 import { formatChineseDateTime } from '../utils/time'
+import type { RecordSnapshot } from '../domain/record'
 import type { ConflictEntry } from '../db/db'
 import { Modal } from './Modal'
 
 interface ConflictDialogProps {
   userId: string | null
+}
+
+/**
+ * 大事的进度 / 截止日摘要。
+ *
+ * 冲突弹窗原本只展示正文，而大事的冲突往往**恰恰不在正文上** ——
+ * 两台设备各自拖了进度条、改了截止日，正文一个字没动。
+ * 不把这两个值摆出来，用户看到的会是两段一模一样的内容，
+ * 完全不知道该选哪个。
+ */
+function projectExtra(snapshot: RecordSnapshot): string | undefined {
+  if (snapshot.type !== 'project') return undefined
+  const parts: string[] = []
+  if (snapshot.progress !== null) parts.push(`进度 ${snapshot.progress}%`)
+  if (snapshot.deadlineLocalDate !== null) parts.push(`截止 ${snapshot.deadlineLocalDate}`)
+  return parts.length > 0 ? parts.join(' · ') : undefined
 }
 
 /**
@@ -24,6 +41,9 @@ export function ConflictDialog({ userId }: ConflictDialogProps) {
   if (!conflict) return null
 
   const isDeleteEdit = conflict.kind === 'delete-edit'
+  // 只在冲突真的落在进度 / 截止日上时才多显示一行，避免平时多出噪音
+  const touchesProject =
+    conflict.fields.includes('progress') || conflict.fields.includes('deadlineLocalDate')
 
   async function decide(choice: 'local' | 'remote' | 'edited') {
     if (!conflict || busy) return
@@ -62,6 +82,7 @@ export function ConflictDialog({ userId }: ConflictDialogProps) {
           content={conflict.local.content}
           time={formatChineseDateTime(conflict.local.updatedAtUtc, conflict.local.updatedTimezone)}
           tone="local"
+          extra={touchesProject ? projectExtra(conflict.local) : undefined}
         />
 
         {isDeleteEdit ? (
@@ -75,6 +96,7 @@ export function ConflictDialog({ userId }: ConflictDialogProps) {
             content={conflict.remote.content}
             time={formatChineseDateTime(conflict.remote.updatedAtUtc, conflict.remote.updatedTimezone)}
             tone="remote"
+            extra={touchesProject ? projectExtra(conflict.remote) : undefined}
           />
         )}
       </div>
@@ -176,11 +198,14 @@ function ConflictVersion({
   content,
   time,
   tone,
+  extra,
 }: {
   label: string
   content: string
   time: string
   tone: 'local' | 'remote'
+  /** 大事的进度 / 截止日摘要，只有真的冲突在这两个字段上时才传 */
+  extra?: string | undefined
 }) {
   return (
     <div
@@ -192,6 +217,7 @@ function ConflictVersion({
       <div className="mt-1 whitespace-pre-wrap break-words text-[14.5px] leading-[1.55] text-ink">
         {content || '（空）'}
       </div>
+      {extra ? <div className="mt-1.5 text-[13px] text-ink">{extra}</div> : null}
       <div className="mt-1.5 text-[11.5px] text-ink-soft">{time}</div>
     </div>
   )

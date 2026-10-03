@@ -24,6 +24,10 @@ const pgSql = readFileSync(
   resolve(process.cwd(), 'supabase/migrations/0001_init.sql'),
   'utf8',
 ).toLowerCase()
+const pgMigrationSql = readFileSync(
+  resolve(process.cwd(), 'supabase/migrations/0002_project_type.sql'),
+  'utf8',
+).toLowerCase()
 
 /** 从 Postgres 建表语句里抠出列名 */
 function pgColumns(table: string): string[] {
@@ -32,11 +36,22 @@ function pgColumns(table: string): string[] {
   ).exec(pgSql)
   const body = match?.[1]
   if (body === undefined) throw new Error(`没找到 public.${table} 的建表语句`)
-  return body
+  const columns = body
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line !== '' && !line.startsWith('--'))
     .map((line) => line.split(/\s+/)[0] ?? '')
+
+  // 0002 之后，真表结构 = 0001 的建表语句 + 后续迁移里的 add column。
+  // 只读 0001 会得出「D1 多出两列」的假警报 —— 而真实原因是迁移。
+  const added = pgMigrationSql.matchAll(
+    new RegExp(`alter table public\\.${table} add column if not exists (\\w+)`, 'g'),
+  )
+  for (const item of added) {
+    const name = item[1]
+    if (name !== undefined && !columns.includes(name)) columns.push(name)
+  }
+  return columns
 }
 
 /** 从真实 SQLite 里读出 D1 的列名 */
@@ -108,9 +123,33 @@ describe('★ 两套后端的表结构必须一致（否则「可互换」是句
     }
   })
 
-  it('type 只允许 idea / todo', () => {
-    expect(d1Sql).toContain("check (type in ('idea', 'todo'))")
-    expect(pgSql).toContain("check (type in ('idea', 'todo'))")
+  it('type 允许 idea / todo / project 三种', () => {
+    expect(d1Sql).toContain("check (type in ('idea', 'todo', 'project'))")
+    // Supabase 那边是 0002 用 alter 放宽的约束
+    expect(pgMigrationSql).toContain("check (type in ('idea', 'todo', 'project'))")
+  })
+
+  it('大事的两个字段两端都有，且约束一致', () => {
+    for (const sql of [d1Sql, pgMigrationSql]) {
+      expect(sql).toContain('progress')
+      expect(sql).toContain('deadline_local_date')
+    }
+    expect(d1Columns('records')).toContain('progress')
+    expect(d1Columns('records')).toContain('deadline_local_date')
+
+    // 「非大事不许有进度和截止日」这条红线两端都要有
+    expect(d1Sql).toContain(
+      "check (type = 'project' or (progress is null and deadline_local_date is null))",
+    )
+    expect(pgMigrationSql).toContain('records_project_fields_only')
+    expect(pgMigrationSql).toContain(
+      "check (type = 'project' or (progress is null and deadline_local_date is null))",
+    )
+  })
+
+  it('进度范围约束两端都有', () => {
+    expect(d1Sql).toContain('check (progress is null or (progress between 0 and 100))')
+    expect(pgMigrationSql).toContain('check (progress is null or (progress between 0 and 100))')
   })
 
   it('两端都把 version 默认成 1', () => {

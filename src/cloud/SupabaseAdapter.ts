@@ -6,6 +6,7 @@
  *   「检查 version → 应用 mutation → version + 1 → 记录 applied_mutations」
  */
 import type { CloudRecord, RecordType } from '../domain/record'
+import { clampDeadlineLocalDate, clampProgress, clampRecordType } from '../domain/record'
 import type {
   ApplyMutationParams,
   ApplyMutationResult,
@@ -18,6 +19,8 @@ const COLUMNS = [
   'user_id',
   'type',
   'content',
+  'progress',
+  'deadline_local_date',
   'created_at_utc',
   'created_timezone',
   'created_local_date',
@@ -43,12 +46,14 @@ function asNullableString(value: unknown): string | null {
 }
 
 function toCloud(row: Row): CloudRecord {
-  const type: RecordType = row.type === 'todo' ? 'todo' : 'idea'
+  const type: RecordType = clampRecordType(row.type)
   return {
     id: asString(row.id),
     userId: asString(row.user_id),
     type,
     content: asString(row.content),
+    progress: clampProgress(row.progress),
+    deadlineLocalDate: clampDeadlineLocalDate(row.deadline_local_date),
     createdAtUtc: asString(row.created_at_utc),
     createdTimezone: asString(row.created_timezone, 'UTC'),
     createdLocalDate: asString(row.created_local_date),

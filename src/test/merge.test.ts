@@ -16,6 +16,8 @@ function snap(overrides: Partial<RecordSnapshot> = {}): RecordSnapshot {
   return {
     type: 'idea',
     content: 'AAA',
+    progress: null,
+    deadlineLocalDate: null,
     createdAtUtc: '2026-09-29T16:00:00.000Z',
     createdTimezone: 'Asia/Shanghai',
     createdLocalDate: '2026-09-30',
@@ -139,6 +141,91 @@ describe('删除冲突（§52）', () => {
     const result = threeWayMerge(base, local, remote)
     expect(result.conflicts).toEqual([])
     expect(result.merged.deletedAtUtc).toBe('2026-09-29T20:00:00.000Z')
+  })
+})
+
+describe('大事（project）的进度与截止日', () => {
+  it('只一端改了进度 → 自动合并，不打扰用户', () => {
+    const base = snap({ type: 'project', content: '机械臂', progress: 20 })
+    const local = snap({ type: 'project', content: '机械臂', progress: 60 })
+    const remote = snap({ type: 'project', content: '机械臂', progress: 20 })
+
+    const result = threeWayMerge(base, local, remote)
+    expect(result.conflicts).toEqual([])
+    expect(result.merged.progress).toBe(60)
+  })
+
+  it('只一端改了截止日 → 自动合并', () => {
+    const base = snap({ type: 'project', content: '机械臂', deadlineLocalDate: null })
+    const local = snap({ type: 'project', content: '机械臂', deadlineLocalDate: null })
+    const remote = snap({ type: 'project', content: '机械臂', deadlineLocalDate: '2026-10-15' })
+
+    const result = threeWayMerge(base, local, remote)
+    expect(result.conflicts).toEqual([])
+    expect(result.merged.deadlineLocalDate).toBe('2026-10-15')
+  })
+
+  it('两端都改进度且不同 → 冲突，且 autoMerged 退回 base（不做「取较大值」）', () => {
+    // 「取较大值」会把「本机退回 0 重做」抹掉，所以宁可交给用户裁决
+    const base = snap({ type: 'project', content: '机械臂', progress: 50 })
+    const local = snap({ type: 'project', content: '机械臂', progress: 0 })
+    const remote = snap({ type: 'project', content: '机械臂', progress: 80 })
+
+    const result = threeWayMerge(base, local, remote)
+    expect(result.conflicts).toContain('progress')
+    expect(result.autoMerged.progress).toBe(50)
+  })
+
+  it('两端都改截止日且不同 → 冲突', () => {
+    const base = snap({ type: 'project', content: '机械臂', deadlineLocalDate: '2026-10-01' })
+    const local = snap({ type: 'project', content: '机械臂', deadlineLocalDate: '2026-10-10' })
+    const remote = snap({ type: 'project', content: '机械臂', deadlineLocalDate: '2026-10-20' })
+
+    const result = threeWayMerge(base, local, remote)
+    expect(result.conflicts).toContain('deadlineLocalDate')
+    expect(result.autoMerged.deadlineLocalDate).toBe('2026-10-01')
+  })
+
+  it('两端改成同一个进度 → 不算冲突', () => {
+    const base = snap({ type: 'project', content: '机械臂', progress: 10 })
+    const local = snap({ type: 'project', content: '机械臂', progress: 100 })
+    const remote = snap({ type: 'project', content: '机械臂', progress: 100 })
+
+    const result = threeWayMerge(base, local, remote)
+    expect(result.conflicts).toEqual([])
+    expect(result.merged.progress).toBe(100)
+  })
+
+  it('一端改正文、另一端改进度 → 两条互不干扰，都保留', () => {
+    const base = snap({ type: 'project', content: '机械臂', progress: 10 })
+    const local = snap({ type: 'project', content: '机械臂 v2', progress: 10 })
+    const remote = snap({ type: 'project', content: '机械臂', progress: 40 })
+
+    const result = threeWayMerge(base, local, remote)
+    expect(result.conflicts).toEqual([])
+    expect(result.merged.content).toBe('机械臂 v2')
+    expect(result.merged.progress).toBe(40)
+  })
+
+  it('裁决「保留另一设备」时，进度与截止日也一起跟着走', () => {
+    const base = snap({ type: 'project', content: '机械臂', progress: 50, deadlineLocalDate: '2026-10-01' })
+    const local = snap({ type: 'project', content: '本机写的', progress: 0, deadlineLocalDate: '2026-10-10' })
+    const remote = snap({ type: 'project', content: '远端写的', progress: 80, deadlineLocalDate: '2026-10-20' })
+
+    const result = threeWayMerge(base, local, remote)
+    expect(result.conflicts).toContain('content')
+
+    expect(applyConflictChoice(result, local).progress).toBe(0)
+    expect(applyConflictChoice(result, remote).progress).toBe(80)
+    expect(applyConflictChoice(result, remote).deadlineLocalDate).toBe('2026-10-20')
+  })
+
+  it('diffSnapshot 会带上进度与截止日的变化', () => {
+    const from = snap({ type: 'project', content: '机械臂', progress: 20, deadlineLocalDate: null })
+    const to = snap({ type: 'project', content: '机械臂', progress: 60, deadlineLocalDate: '2026-10-15' })
+    const patch = diffSnapshot(from, to)
+    expect(patch.progress).toBe(60)
+    expect(patch.deadlineLocalDate).toBe('2026-10-15')
   })
 })
 

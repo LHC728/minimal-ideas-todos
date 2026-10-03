@@ -8,6 +8,7 @@
  *      正确性由 Pull → Reconcile → Push → Pull 的同步循环保证。
  */
 import type { CloudRecord, RecordType } from '../domain/record'
+import { clampDeadlineLocalDate, clampProgress, clampRecordType } from '../domain/record'
 import type { ApplyMutationParams, ApplyMutationResult, CloudAdapter } from './CloudAdapter'
 import { cfRequest, getCloudflareClient } from './cloudflareClient'
 
@@ -25,13 +26,15 @@ function asNullableString(value: unknown): string | null {
 
 /** 网络来的东西一律当作不可信，逐个字段归一后再进领域层 */
 function toCloud(row: Row): CloudRecord {
-  const type: RecordType = row.type === 'todo' ? 'todo' : 'idea'
+  const type: RecordType = clampRecordType(row.type)
   const version = Number(row.version)
   return {
     id: asString(row.id),
     userId: asString(row.userId),
     type,
     content: asString(row.content),
+    progress: clampProgress(row.progress),
+    deadlineLocalDate: clampDeadlineLocalDate(row.deadlineLocalDate),
     createdAtUtc: asString(row.createdAtUtc),
     createdTimezone: asString(row.createdTimezone, 'UTC'),
     createdLocalDate: asString(row.createdLocalDate),

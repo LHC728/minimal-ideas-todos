@@ -7,7 +7,9 @@ import {
   addDays,
   currentMonth,
   dayOfWeek,
+  daysBetweenLocalDates,
   daysInMonth,
+  deadlineCountdown,
   formatChineseDate,
   formatChineseDateTime,
   formatDoneStamp,
@@ -182,5 +184,99 @@ describe('非法输入不得产出假值', () => {
     expect(Number.isInteger(month.year)).toBe(true)
     expect(month.month).toBeGreaterThanOrEqual(1)
     expect(month.month).toBeLessThanOrEqual(12)
+  })
+})
+
+/**
+ * 大事（project）的倒计时。
+ *
+ * 契约与上面一组一致：**任意输入不许抛异常、不许产出 NaN 天**。
+ * 另外这里额外锁死一件事：天数差**必须按日历天算**，不能被时区或夏令时带偏 ——
+ * 所以 daysBetweenLocalDates 刻意走 Date.UTC，而不是 `new Date(a) - new Date(b)`。
+ */
+describe('大事截止日倒计时', () => {
+  it('daysBetweenLocalDates 按日历天算，跨月跨年都对', () => {
+    expect(daysBetweenLocalDates('2026-09-30', '2026-09-30')).toBe(0)
+    expect(daysBetweenLocalDates('2026-09-30', '2026-10-05')).toBe(5)
+    expect(daysBetweenLocalDates('2026-09-30', '2026-10-01')).toBe(1)
+    expect(daysBetweenLocalDates('2026-10-01', '2026-09-30')).toBe(-1)
+    // 跨月（10 月 31 天）
+    expect(daysBetweenLocalDates('2026-09-30', '2026-11-01')).toBe(32)
+    // 跨年
+    expect(daysBetweenLocalDates('2026-12-31', '2027-01-01')).toBe(1)
+    expect(daysBetweenLocalDates('2026-01-01', '2027-01-01')).toBe(365)
+    // 闰年 2 月多一天
+    expect(daysBetweenLocalDates('2024-02-28', '2024-03-01')).toBe(2)
+    expect(daysBetweenLocalDates('2026-02-28', '2026-03-01')).toBe(1)
+  })
+
+  it('daysBetweenLocalDates 对畸形输入返回 null，而不是 NaN 天', () => {
+    for (const bad of ['', 'bad', '2026-09', '2026-13-01', '2026-02-30', 'null']) {
+      expect(daysBetweenLocalDates(bad, '2026-10-05')).toBeNull()
+      expect(daysBetweenLocalDates('2026-09-30', bad)).toBeNull()
+    }
+    expect(daysBetweenLocalDates('2026-02-29', '2026-03-01')).toBeNull() // 2026 非闰年
+  })
+
+  it('已过期 / 今天 / 明天分别给出对应的文案与语气', () => {
+    const today = '2026-09-30'
+    expect(deadlineCountdown('2026-09-27', today)).toEqual({
+      text: '已过期 3 天',
+      tone: 'overdue',
+      days: -3,
+    })
+    expect(deadlineCountdown('2026-09-29', today)).toEqual({
+      text: '已过期 1 天',
+      tone: 'overdue',
+      days: -1,
+    })
+    expect(deadlineCountdown('2026-09-30', today)).toEqual({
+      text: '今天到期',
+      tone: 'overdue',
+      days: 0,
+    })
+    expect(deadlineCountdown('2026-10-01', today)).toEqual({
+      text: '明天到期',
+      tone: 'soon',
+      days: 1,
+    })
+  })
+
+  it('三天以内是 soon，超过三天是 calm', () => {
+    const today = '2026-09-30'
+    expect(deadlineCountdown('2026-10-02', today)).toEqual({
+      text: '还剩 2 天',
+      tone: 'soon',
+      days: 2,
+    })
+    expect(deadlineCountdown('2026-10-03', today)).toEqual({
+      text: '还剩 3 天',
+      tone: 'soon',
+      days: 3,
+    })
+    // 第 4 天起退出预警
+    expect(deadlineCountdown('2026-10-04', today)).toEqual({
+      text: '还剩 4 天',
+      tone: 'calm',
+      days: 4,
+    })
+    expect(deadlineCountdown('2026-12-31', today)).toEqual({
+      text: '还剩 92 天',
+      tone: 'calm',
+      days: 92,
+    })
+  })
+
+  it('倒计时按天算，不受时区影响（同一天不同时区结论一致）', () => {
+    // 只传纯日期，压根没有时区参与的余地 —— 换设备不会从「还剩 5 天」漂成「还剩 4 天」
+    expect(deadlineCountdown('2026-10-05', '2026-09-30')?.days).toBe(5)
+    expect(deadlineCountdown('2026-10-05', '2026-09-30')?.text).toBe('还剩 5 天')
+  })
+
+  it('非法截止日返回 null，界面据此不渲染倒计时', () => {
+    for (const bad of ['', 'bad', '2026-02-30', '2026-13-01', 'null']) {
+      expect(deadlineCountdown(bad, '2026-09-30')).toBeNull()
+    }
+    expect(deadlineCountdown('2026-10-05', 'bad')).toBeNull()
   })
 })

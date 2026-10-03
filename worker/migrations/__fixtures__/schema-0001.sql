@@ -17,6 +17,11 @@
 --
 -- 应用方式：
 --   npx wrangler d1 execute yike-sync --remote --file=worker/schema.sql
+--
+-- ⚠️⚠️ 这是 0002（大事 / project）**之前**的冻结副本，仅供迁移测试当输入。
+-- 它记录的是「线上库当时长什么样」这个历史事实，
+-- **永远不要跟着 worker/schema.sql 一起改**。
+-- 改了就等于拿新表结构去测新表结构，迁移测试会彻底失去意义。
 -- =====================================================================
 
 -- ---------------------------------------------------------------
@@ -48,22 +53,12 @@ create index if not exists access_tokens_user_idx on access_tokens (user_id);
 --   时间字段统一存 ISO-8601 UTC 字符串（形如 2026-09-30T13:45:00.000Z）。
 --   定长同格式的 ISO 字符串，字典序等于时间序 —— 所以可以直接
 --   ORDER BY server_updated_at，不需要额外处理。
---
---   ⚠️ 本文件只对**全新的库**一次到位。
---   线上已有数据的库必须走 worker/migrations/0002_project_type.sql ——
---   `create table if not exists` 遇到已存在的表会整段跳过，
---   改这里的列定义对老库**完全不生效**，而且 type 的 CHECK 约束
---   只能靠重建表才能改。这是本项目最容易踩空的一处。
 -- ---------------------------------------------------------------
 create table if not exists records (
   id                 text primary key,
   user_id            text not null,
-  type               text not null check (type in ('idea', 'todo', 'project')),
+  type               text not null check (type in ('idea', 'todo')),
   content            text not null default '',
-  -- 大事的推进进度，0–100 的整数。灵感 / 待办恒为 null。
-  progress           integer check (progress is null or (progress between 0 and 100)),
-  -- 大事的截止日，纯日期 YYYY-MM-DD（不是时刻，不带时区）
-  deadline_local_date text,
   created_at_utc     text not null,
   created_timezone   text not null default 'UTC',
   created_local_date text not null,
@@ -73,10 +68,7 @@ create table if not exists records (
   completed_timezone text,
   deleted_at_utc     text,
   version            integer not null default 1,
-  server_updated_at  text not null,
-  -- 进度和截止日只属于大事。灵感 / 待办带着这两个字段是**逻辑上不可能**的，
-  -- 与其在读取端到处写防御性分支，不如让数据库直接拒绝。
-  check (type = 'project' or (progress is null and deadline_local_date is null))
+  server_updated_at  text not null
 );
 
 create index if not exists records_user_id_idx             on records (user_id);

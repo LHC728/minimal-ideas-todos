@@ -13,6 +13,7 @@ import type {
   CloudAdapter,
 } from '../cloud/CloudAdapter'
 import type { CloudRecord, RecordType } from '../domain/record'
+import { clampDeadlineLocalDate, clampProgress, clampRecordType } from '../domain/record'
 import { AppDatabase, setActiveDatabase } from '../db/db'
 
 export class FakeCloudServer implements CloudAdapter {
@@ -166,12 +167,16 @@ export class FakeCloudServer implements CloudAdapter {
 
   private buildFromCreate(userId: string, params: ApplyMutationParams): CloudRecord {
     const p = params.payload as Record<string, unknown>
-    const type: RecordType = p.type === 'todo' ? 'todo' : 'idea'
+    const type: RecordType = clampRecordType(p.type)
+    // 与真实后端一致：非大事的 progress / deadline 一律丢弃
+    const isProject = type === 'project'
     return {
       id: params.recordId,
       userId,
       type,
       content: typeof p.content === 'string' ? p.content : '',
+      progress: isProject ? clampProgress(p.progress) : null,
+      deadlineLocalDate: isProject ? clampDeadlineLocalDate(p.deadlineLocalDate) : null,
       createdAtUtc: String(p.createdAtUtc ?? this.now()),
       createdTimezone: String(p.createdTimezone ?? 'Asia/Shanghai'),
       createdLocalDate: String(p.createdLocalDate ?? '2026-09-30'),
@@ -188,6 +193,13 @@ export class FakeCloudServer implements CloudAdapter {
   private applyPatch(row: CloudRecord, payload: Record<string, unknown>): CloudRecord {
     const next: CloudRecord = { ...row }
     if (typeof payload.content === 'string') next.content = payload.content
+    // 与真实后端一致：只有大事才接受 progress / deadline
+    if (row.type === 'project') {
+      if ('progress' in payload) next.progress = clampProgress(payload.progress)
+      if ('deadlineLocalDate' in payload) {
+        next.deadlineLocalDate = clampDeadlineLocalDate(payload.deadlineLocalDate)
+      }
+    }
     if (typeof payload.updatedAtUtc === 'string') next.updatedAtUtc = payload.updatedAtUtc
     if (typeof payload.updatedTimezone === 'string') next.updatedTimezone = payload.updatedTimezone
     if ('completedAtUtc' in payload) {

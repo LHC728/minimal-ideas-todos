@@ -26,7 +26,12 @@ import { uuidv4 } from '../utils/id'
 import { nowIso } from '../utils/time'
 
 /** 参与三方合并的业务字段 */
-export type MergeField = 'content' | 'completedAtUtc' | 'deletedAtUtc'
+export type MergeField =
+  | 'content'
+  | 'progress'
+  | 'deadlineLocalDate'
+  | 'completedAtUtc'
+  | 'deletedAtUtc'
 
 export interface MergeResult {
   /** 无冲突时的最终结果；有冲突时冲突字段取 base（即"未决"） */
@@ -96,6 +101,39 @@ export function threeWayMerge(
     else autoMerged.content = local.content
   }
 
+  // ---- progress（大事进度） ----
+  //
+  // 两端都动了进度才算冲突。注意这里**不做「取较大值」** ——
+  // 那看起来聪明，实际会把「本机刚把进度退回 0 重新做」直接抹掉。
+  // 语义不明的合并宁可交给用户裁决。
+  {
+    const localChanged = local.progress !== base.progress
+    const remoteChanged = remote.progress !== base.progress
+    if (localChanged && remoteChanged) {
+      if (local.progress === remote.progress) autoMerged.progress = local.progress
+      else {
+        conflicts.push('progress')
+        autoMerged.progress = base.progress
+      }
+    } else if (remoteChanged) autoMerged.progress = remote.progress
+    else autoMerged.progress = local.progress
+  }
+
+  // ---- deadlineLocalDate（大事截止日） ----
+  {
+    const localChanged = local.deadlineLocalDate !== base.deadlineLocalDate
+    const remoteChanged = remote.deadlineLocalDate !== base.deadlineLocalDate
+    if (localChanged && remoteChanged) {
+      if (local.deadlineLocalDate === remote.deadlineLocalDate) {
+        autoMerged.deadlineLocalDate = local.deadlineLocalDate
+      } else {
+        conflicts.push('deadlineLocalDate')
+        autoMerged.deadlineLocalDate = base.deadlineLocalDate
+      }
+    } else if (remoteChanged) autoMerged.deadlineLocalDate = remote.deadlineLocalDate
+    else autoMerged.deadlineLocalDate = local.deadlineLocalDate
+  }
+
   // ---- completedAtUtc ----
   {
     const localChanged = !eq(local.completedAtUtc, base.completedAtUtc)
@@ -159,6 +197,8 @@ export function threeWayMerge(
   const merged: RecordSnapshot = { ...autoMerged }
   for (const field of conflicts) {
     if (field === 'content') merged.content = local.content
+    if (field === 'progress') merged.progress = local.progress
+    if (field === 'deadlineLocalDate') merged.deadlineLocalDate = local.deadlineLocalDate
     if (field === 'completedAtUtc') {
       merged.completedAtUtc = local.completedAtUtc
       merged.completedTimezone = local.completedTimezone
@@ -177,6 +217,8 @@ export function applyConflictChoice(
   const final: RecordSnapshot = { ...result.autoMerged }
   for (const field of result.conflicts) {
     if (field === 'content') final.content = chosen.content
+    if (field === 'progress') final.progress = chosen.progress
+    if (field === 'deadlineLocalDate') final.deadlineLocalDate = chosen.deadlineLocalDate
     if (field === 'completedAtUtc') {
       final.completedAtUtc = chosen.completedAtUtc
       final.completedTimezone = chosen.completedTimezone
@@ -197,6 +239,8 @@ function conflictKind(base: RecordSnapshot, local: RecordSnapshot, remote: Recor
 export function diffSnapshot(from: RecordSnapshot, to: RecordSnapshot): MutationPayload {
   const patch: MutationPayload = {}
   if (from.content !== to.content) patch.content = to.content
+  if (from.progress !== to.progress) patch.progress = to.progress
+  if (from.deadlineLocalDate !== to.deadlineLocalDate) patch.deadlineLocalDate = to.deadlineLocalDate
   if (from.completedAtUtc !== to.completedAtUtc) {
     patch.completedAtUtc = to.completedAtUtc
     patch.completedTimezone = to.completedTimezone
@@ -307,6 +351,8 @@ export async function resolveConflict(
       await db.records.where('id').equals(recordId).modify((record) => {
         record.type = final.type
         record.content = final.content
+        record.progress = final.progress
+        record.deadlineLocalDate = final.deadlineLocalDate
         record.createdAtUtc = final.createdAtUtc
         record.createdTimezone = final.createdTimezone
         record.createdLocalDate = final.createdLocalDate

@@ -55,6 +55,39 @@ export class AppDatabase extends Dexie {
       conflicts: 'recordId, userId, kind, createdAt',
       meta: 'key',
     })
+
+    // ---- v2：大事（project）新增 progress / deadlineLocalDate ----
+    //
+    // 索引没有变化，但**必须**有这一次升级，不能只改类型了事。
+    // 老记录里这两个键是 `undefined`，而云端返回的是 `null` ——
+    // `snapshotEquals` 用的是严格相等，undefined ≠ null，
+    // 于是「另一台设备根本没动过这条记录」会被判成「动过」，
+    // 在删除冲突里凭空多出一个要用户裁决的弹窗。
+    // 一次性把老数据补齐成 null，之后所有比较就都是同一套语义了。
+    this.version(2)
+      .stores({
+        records:
+          'id, userId, type, createdAtUtc, createdLocalDate, deletedAtUtc, syncState, ' +
+          '[userId+type], [userId+createdLocalDate], [userId+deletedAtUtc]',
+        outbox:
+          'mutationId, recordId, userId, state, createdAt, ' +
+          '[recordId+state], [userId+state], [state+createdAt]',
+        conflicts: 'recordId, userId, kind, createdAt',
+        meta: 'key',
+      })
+      .upgrade(async (transaction) => {
+        await transaction
+          .table('records')
+          .toCollection()
+          .modify((record: LocalRecord) => {
+            // 这里刻意绕开类型系统：类型上 progress 是必填的 `number | null`，
+            // 但磁盘上的老数据确实没有这个键。用索引签名视图才能如实地
+            // 检查「键是否存在」，而不是被类型断言骗过去。
+            const raw = record as unknown as Record<string, unknown>
+            if (raw['progress'] === undefined) raw['progress'] = null
+            if (raw['deadlineLocalDate'] === undefined) raw['deadlineLocalDate'] = null
+          })
+      })
   }
 }
 

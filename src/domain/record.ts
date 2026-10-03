@@ -3,11 +3,22 @@
  *
  *   灵感 = Record(type = "idea")
  *   待办 = Record(type = "todo")
+ *   大事 = Record(type = "project")   —— 带进度与截止日
  *
  * 四个页面只是对同一份数据的不同观察方式。
+ *
+ * 「大事」刻意**不新建表**：它必须走同一条同步 / 冲突 / 撤销链路，
+ * 否则每加一种记录类型就要再写一遍 Outbox、三方合并和幂等。
+ * 代价只是 idea / todo 上多两个恒为 null 的字段。
  */
+import { parseLocalDate } from '../utils/time'
 
-export type RecordType = 'idea' | 'todo'
+export type RecordType = 'idea' | 'todo' | 'project'
+
+/** 大事进度的取值范围与步进 */
+export const PROGRESS_MIN = 0
+export const PROGRESS_MAX = 100
+export const PROGRESS_STEP = 5
 
 /**
  * 本地同步元数据。属于本机状态，不作为业务数据在各端互相同步（方案 §31）。
@@ -21,6 +32,21 @@ export interface LocalRecord {
 
   type: RecordType
   content: string
+
+  /**
+   * 大事的推进进度，0–100 的整数。
+   * idea / todo 恒为 null —— 只有大事才有「做到哪了」这回事。
+   */
+  progress: number | null
+
+  /**
+   * 大事的截止日，纯日期 `YYYY-MM-DD`（**不是时刻**）。
+   *
+   * 存纯日期是刻意的：用户想的是「几号之前」，不是「几点几分」；
+   * 而且纯日期不带时区，换台设备看不会从 10月5日 漂成 10月4日。
+   * 倒计时按本地日历日算差值，全程不碰时区换算。
+   */
+  deadlineLocalDate: string | null
 
   /** 第一次写下的那一刻，永不改变（§10） */
   createdAtUtc: string
@@ -49,6 +75,8 @@ export interface LocalRecord {
 export interface RecordSnapshot {
   type: RecordType
   content: string
+  progress: number | null
+  deadlineLocalDate: string | null
   createdAtUtc: string
   createdTimezone: string
   createdLocalDate: string
@@ -68,6 +96,8 @@ export interface CloudRecord {
   userId: string
   type: RecordType
   content: string
+  progress: number | null
+  deadlineLocalDate: string | null
   createdAtUtc: string
   createdTimezone: string
   createdLocalDate: string
@@ -86,6 +116,8 @@ export function snapshotOf(record: LocalRecord): RecordSnapshot {
   return {
     type: record.type,
     content: record.content,
+    progress: record.progress,
+    deadlineLocalDate: record.deadlineLocalDate,
     createdAtUtc: record.createdAtUtc,
     createdTimezone: record.createdTimezone,
     createdLocalDate: record.createdLocalDate,
@@ -101,6 +133,8 @@ export function snapshotOfCloud(cloud: CloudRecord): RecordSnapshot {
   return {
     type: cloud.type,
     content: cloud.content,
+    progress: cloud.progress,
+    deadlineLocalDate: cloud.deadlineLocalDate,
     createdAtUtc: cloud.createdAtUtc,
     createdTimezone: cloud.createdTimezone,
     createdLocalDate: cloud.createdLocalDate,
@@ -123,6 +157,8 @@ export function emptySnapshot(): RecordSnapshot {
   return {
     type: 'idea',
     content: '',
+    progress: null,
+    deadlineLocalDate: null,
     createdAtUtc: '',
     createdTimezone: 'UTC',
     createdLocalDate: '1970-01-01',
@@ -138,6 +174,8 @@ export function snapshotEquals(a: RecordSnapshot, b: RecordSnapshot): boolean {
   return (
     a.type === b.type &&
     a.content === b.content &&
+    a.progress === b.progress &&
+    a.deadlineLocalDate === b.deadlineLocalDate &&
     a.createdAtUtc === b.createdAtUtc &&
     a.createdTimezone === b.createdTimezone &&
     a.createdLocalDate === b.createdLocalDate &&
@@ -145,6 +183,66 @@ export function snapshotEquals(a: RecordSnapshot, b: RecordSnapshot): boolean {
     a.completedTimezone === b.completedTimezone &&
     a.deletedAtUtc === b.deletedAtUtc
   )
+}
+
+/**
+ * 把任意来源的进度值收敛到 0–100 的整数。
+ *
+ * 进度会从云端流进来（远端可能是一个损坏的值），也会从滑块流进来
+ * （滑块给的是字符串）。所以统一在这里收敛，绝不让 `undefined` /
+ * `NaN` / `140` 这种东西进到领域模型里 —— 否则进度条会渲染出
+ * `width: NaN%` 这种既看不见又查不出的东西。
+ */
+export function clampProgress(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const num = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(num)) return null
+  return Math.min(PROGRESS_MAX, Math.max(PROGRESS_MIN, Math.round(num)))
+}
+
+/** 大事的进度，缺失时按 0 处理 */
+export function progressOf(record: LocalRecord): number {
+  return record.progress ?? PROGRESS_MIN
+}
+
+/**
+ * 收敛记录类型：只认三种，其余一律当作灵感。
+ *
+ * 两套后端的适配器都从这里取 —— 抄两份的话，将来加第四种类型时
+ * 必然只改一处，另一处会把新类型悄悄降级成灵感。
+ */
+export function clampRecordType(value: unknown): RecordType {
+  if (value === 'todo' || value === 'project') return value
+  return 'idea'
+}
+
+/**
+ * 收敛截止日：只接受合法的 `YYYY-MM-DD`，其余一律当作「没设截止日」。
+ *
+ * 刻意不做「就近猜测」—— 猜错一天比干脆没有截止日更糟，
+ * 因为它会安静地给出一个看起来正常、实际错误的倒计时。
+ */
+export function clampDeadlineLocalDate(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  return parseLocalDate(value) ? value : null
+}
+
+/**
+ * 记录类型在界面上的名字。
+ *
+ * 放在领域层而不是各页面各写一份三元表达式 —— 加第三种类型那次，
+ * 正是靠这个才不会漏掉某个页面（搜索结果的类型标签就漏过一次）。
+ */
+export const RECORD_TYPE_LABEL: Record<RecordType, string> = {
+  idea: '灵感',
+  todo: '待办',
+  project: '大事',
+}
+
+/** 列表里显示的类型标签：已完成的待办显示「已完成」，其余显示类型名 */
+export function typeLabelOf(record: LocalRecord): string {
+  if (record.type === 'todo' && record.completedAtUtc !== null) return '已完成'
+  return RECORD_TYPE_LABEL[record.type]
 }
 
 // ---------------------------------------------------------------
@@ -171,12 +269,47 @@ export function isDoneTodo(record: LocalRecord): boolean {
   return record.deletedAtUtc === null && record.type === 'todo' && record.completedAtUtc !== null
 }
 
+/** 大事（首页那个独立模块的数据来源） */
+export function isProject(record: LocalRecord): boolean {
+  return record.deletedAtUtc === null && record.type === 'project'
+}
+
+/**
+ * 还在推进中的大事：进度没到 100。
+ *
+ * 「目前在做的大事」这个标题决定了语义 —— 已经推到 100 的就不是「在做」了。
+ * 但它不会消失：首页时间线里仍然留着它，进度和截止日进详情能看到。
+ */
+export function isOpenProject(record: LocalRecord): boolean {
+  return isProject(record) && progressOf(record) < PROGRESS_MAX
+}
+
 /** 搜索：content 包含关键字，不含已删除（§61） */
 export function matchesQuery(record: LocalRecord, query: string): boolean {
   if (record.deletedAtUtc !== null) return false
   const q = query.trim().toLowerCase()
   if (!q) return true
   return record.content.toLowerCase().includes(q)
+}
+
+/**
+ * 大事模块的排序：**截止日升序，最紧急的排最上**。
+ *
+ * 这个模块存在的唯一意义就是「打开就知道先干哪个」，所以排序必须由
+ * 紧迫度决定，不能按创建时间。
+ *
+ * 没有截止日的排最后 —— 它们不紧迫，不该把有 deadline 的挤下去。
+ * 截止日相同时按创建时间倒序兜底，保证顺序稳定（同一毫秒也不会乱跳）。
+ */
+export function byDeadlineAsc(a: LocalRecord, b: LocalRecord): number {
+  const aDeadline = a.deadlineLocalDate
+  const bDeadline = b.deadlineLocalDate
+  if (aDeadline !== bDeadline) {
+    if (aDeadline === null) return 1
+    if (bDeadline === null) return -1
+    return aDeadline < bDeadline ? -1 : 1
+  }
+  return byCreatedAtDesc(a, b)
 }
 
 /** 创建时间倒序（新的在前） */

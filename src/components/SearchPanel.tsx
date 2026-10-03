@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { Search } from 'lucide-react'
 import { uiActions } from '../app/uiStore'
 import { useSearchResults } from '../hooks/useRecords'
+import { typeLabelOf } from '../domain/record'
 import { formatHm, relativeDayLabel } from '../utils/time'
 import { Modal } from './Modal'
 
@@ -73,7 +74,7 @@ export function SearchPanel({ userId, open, timezone }: SearchPanelProps) {
                         {record.content}
                       </span>
                       <span className="mt-[2px] shrink-0 text-[11.5px] text-ink-soft">
-                        {record.type === 'todo' ? (record.completedAtUtc ? '已完成' : '待办') : '灵感'}
+                        {typeLabelOf(record)}
                       </span>
                     </button>
                   </li>

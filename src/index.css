@@ -29,11 +29,15 @@
   --color-line: #e9e6e1;
   --color-line-soft: #f0eeea;
 
-  /* 语义色：灵感 = 赭石（暖、发散） / 待办 = 雾蓝（冷、行动） */
+  /* 语义色：灵感 = 赭石（暖、发散） / 待办 = 雾蓝（冷、行动）
+     大事 = 靛紫（专注、在推进）—— 三个色相互相拉得开，
+     在时间线上一眼就能分辨哪条是什么。 */
   --color-idea: #8f5d21;
   --color-idea-soft: #f7f1e8;
   --color-todo: #4a6d8a;
   --color-todo-soft: #eaf0f5;
+  --color-project: #4f46a3;
+  --color-project-soft: #efedf9;
 
   --color-danger: #b4544b;
 
@@ -43,6 +47,7 @@
      原先隐式的白色压在赭石上只有 3.28:1，一直没被发现。 */
   --color-on-idea: #ffffff;
   --color-on-todo: #ffffff;
+  --color-on-project: #ffffff;
 
   /* 弹层背后的遮罩 */
   --color-scrim: rgba(28, 28, 30, 0.28);
@@ -203,6 +208,92 @@
   box-shadow: 0 1px 2px var(--shadow-card);
 }
 
+/* ---------------------------------------------------------------
+   原生 <progress>
+
+   用原生元素而不是 `div + role="progressbar"`：语义本来就该是
+   <progress>，读屏软件会直接朗读「已完成 60%」，不用我们手写
+   aria-valuenow / aria-valuemin / aria-valuemax 三个属性还容易写漏。
+
+   代价是它的默认外观在三大内核上都不一样（而且都很丑），
+   必须自己画 —— 所以有了这个 utility。
+   --------------------------------------------------------------- */
+@utility progress-native {
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  background: var(--color-sunken);
+  overflow: hidden;
+
+  &::-webkit-progress-bar {
+    height: 100%;
+    background: var(--color-sunken);
+  }
+  &::-webkit-progress-value {
+    height: 100%;
+    background: var(--color-project);
+  }
+  &::-moz-progress-bar {
+    height: 100%;
+    background: var(--color-project);
+  }
+}
+
+/* ---------------------------------------------------------------
+   进度滑块（大事专用）
+
+   原生 input[type=range] 在 Chrome / Safari / Firefox 上的默认外观
+   差异极大，必须自己画。写成 utility 而不是散在组件里，是因为
+   伪元素选择器用 Tailwind 的任意变体写会非常难读，而且很容易
+   漏掉某个内核 —— 漏了的表现是「在手机上是个灰色默认滑块」，
+   本地桌面浏览器完全看不出来。
+
+   两个关键点：
+   1. 输入框本身 44px 高，但**轨道只有 6px** —— 触摸目标要够大，
+      视觉要够轻。轨道的高度靠 margin 把滑块拉回视觉中心。
+   2. 输入框自己的轨道是**透明**的：填充效果由背后叠的那层
+      ProgressTrack 提供，这样「已填充 / 未填充」两段颜色
+      用的是同一套令牌，不会和设计系统漂移。
+   --------------------------------------------------------------- */
+@utility progress-slider {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: pointer;
+
+  &::-webkit-slider-runnable-track {
+    height: 6px;
+    background: transparent;
+  }
+  &::-webkit-slider-thumb {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 22px;
+    height: 22px;
+    /* (6 - 22) / 2，把滑块拉回 6px 轨道的视觉中心 */
+    margin-top: -8px;
+    border-radius: 9999px;
+    background: var(--color-surface);
+    border: 2px solid var(--color-project);
+  }
+  &::-moz-range-track {
+    height: 6px;
+    background: transparent;
+  }
+  &::-moz-range-thumb {
+    width: 22px;
+    height: 22px;
+    border: 2px solid var(--color-project);
+    border-radius: 9999px;
+    background: var(--color-surface);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--color-project);
+    outline-offset: 2px;
+    border-radius: 10px;
+  }
+}
+
 /* 浮层（Toast / 抽屉 / 弹窗）：全项目仅此两处允许出现阴影。 */
 @utility float-raised {
   box-shadow: 0 6px 24px -12px var(--shadow-pop);
@@ -242,11 +333,14 @@ html.dark {
   --color-idea-soft: #2c2318;
   --color-todo: #8db1cd;
   --color-todo-soft: #1c2831;
+  --color-project: #a99ee8;
+  --color-project-soft: #2a2545;
 
   --color-danger: #dd8a80;
 
   --color-on-idea: #17161a;
   --color-on-todo: #17161a;
+  --color-on-project: #17161a;
 
   --color-scrim: rgba(0, 0, 0, 0.62);
 

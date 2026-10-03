@@ -124,11 +124,13 @@ const TEXT_PAIRS = {
   'ink-soft': ['canvas', 'surface', 'sunken'],
   idea: ['canvas', 'surface', 'idea-soft'],
   todo: ['canvas', 'surface', 'todo-soft'],
+  project: ['canvas', 'surface', 'project-soft'],
   danger: ['canvas', 'surface'],
   // 实心按钮 / 打勾里的文字与勾：它们是**内容**，不是装饰。
   // 白色是这里原先隐式的值 —— 现在它必须显式定义，因为深色底上白色会翻车。
   'on-idea': ['idea'],
   'on-todo': ['todo'],
+  'on-project': ['project'],
 }
 
 /** 只用于装饰（分隔线旁的小圆点、关闭图标），不承载语义 */

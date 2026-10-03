@@ -12,11 +12,24 @@ import {
   softDelete,
   uncompleteTodo,
   updateContent,
+  updateDeadline,
+  updateProjectProgress,
   type CreateRecordInput,
 } from '../db/recordRepository'
 import { countPending } from '../db/outboxRepository'
 import type { LocalRecord, RecordType } from '../domain/record'
-import { byCompletedAtDesc, byCreatedAtDesc, isDoneTodo, isIdea, isOnTimeline, isOpenTodo, matchesQuery } from '../domain/record'
+import {
+  byCompletedAtDesc,
+  byCreatedAtDesc,
+  byDeadlineAsc,
+  isDoneTodo,
+  isIdea,
+  isOnTimeline,
+  isOpenProject,
+  isOpenTodo,
+  matchesQuery,
+  PROGRESS_MAX,
+} from '../domain/record'
 import { syncEngine } from '../sync/SyncEngine'
 import { countConflicts, resolveConflict, type ConflictChoice } from '../sync/ConflictService'
 
@@ -63,6 +76,20 @@ export function useOpenTodos(userId: string | null): LocalRecord[] {
 export function useDoneTodos(userId: string | null): LocalRecord[] {
   const records = useAllRecords(userId)
   return records.filter(isDoneTodo).toSorted(byCompletedAtDesc)
+}
+
+/**
+ * 首页「目前在做的大事」。
+ *
+ * 排序是**截止日升序**（最紧急的在最上），不是创建时间 ——
+ * 这块地方存在的意义就是「打开就知道先干哪个」。
+ * 没设截止日的排最后。
+ *
+ * 推到 100% 的不在这里，但也不会消失：它仍在首页时间线里。
+ */
+export function useOpenProjects(userId: string | null): LocalRecord[] {
+  const records = useAllRecords(userId)
+  return records.filter(isOpenProject).toSorted(byDeadlineAsc)
 }
 
 /** 日历归档：按 created_local_date（§23、§24、§80） */
@@ -145,6 +172,24 @@ export const recordActions = {
 
   async updateContent(recordId: string, content: string): Promise<void> {
     await updateContent(recordId, content)
+    await afterWrite()
+  },
+
+  /** 大事进度。调用方负责在**松手时**调一次，不要跟着滑块连续调。 */
+  async setProgress(recordId: string, progress: number): Promise<void> {
+    await updateProjectProgress(recordId, progress)
+    await afterWrite()
+  },
+
+  /** 一键把大事推到 100%（详情里的「完成」按钮） */
+  async finishProject(recordId: string): Promise<void> {
+    await updateProjectProgress(recordId, PROGRESS_MAX)
+    await afterWrite()
+  },
+
+  /** 设置 / 清除大事截止日；传 null 清除 */
+  async setDeadline(recordId: string, deadlineLocalDate: string | null): Promise<void> {
+    await updateDeadline(recordId, deadlineLocalDate)
     await afterWrite()
   },
 

@@ -4,12 +4,13 @@
 
 > 想到的那一刻，就记下来。
 
-极简、本地优先、跨设备同步的「灵感 + 待办 + 时间线」工具。
+极简、本地优先、跨设备同步的「灵感 + 待办 + 大事 + 时间线」工具。
 
-只解决两件事：
+只解决三件事：
 
 1. 我突然想到一个东西 → 立即记下来。
 2. 我突然想到一件要做的事 → 立即记下来，并可以完成它。
+3. 我最近在推进一件大事 → 记下来，随时看进度和还剩几天。
 
 核心体验：**想到 → 写下 → 继续做自己的事情。**
 
@@ -60,6 +61,7 @@ src/
   app/          router / AppShell / uiStore / navItems / themeStore（三态主题）
   pages/        HomePage  IdeasPage  CalendarPage  TodosPage  LoginPage
   components/   QuickCapture RecordRow RecordNode CompletedTodoRow RecordDetail
+                ProjectModule ProjectEditor ProjectProgress（大事模块 / 编辑器 / 进度条）
                 TodoCheckbox DateGroup MonthCalendar BottomNav DesktopSidebar
                 SyncIndicator ConflictDialog SearchPanel SettingsSheet Modal Toaster
                 ErrorBoundary
@@ -71,10 +73,11 @@ src/
                 CloudflareAdapter  cloudflareClient  cloudflareSession  cloudConfig
                 SupabaseAdapter  supabaseClient
   auth/         AuthService
-  hooks/        useRecords  useSyncStatus  useMediaQuery
+  hooks/        useRecords  useSyncStatus  useMediaQuery  useToday（跨午夜刷新）
   utils/        time  timezone  id
 worker/         Cloudflare Workers 后端（可选，不用就不部署）
-  schema.sql    D1 建表 + 把产品红线写成触发器的脚本
+  schema.sql    D1 建表 + 把产品红线写成触发器的脚本（⚠️ 只对全新库有效）
+  migrations/   增量迁移；0002 是「大事」要的那次（必须重建 records 表）
   src/core.ts   鉴权与「原子应用一次 Mutation」（纯逻辑，好测）
   src/index.ts  HTTP 层：CORS / 路由 / 请求体校验
   wrangler.toml database_id 由 npm run cloudflare:setup 回填
@@ -86,6 +89,7 @@ scripts/
   check-sync.mjs          对着真实后端跑一遍同步接口（幂等/并发/软删除）
   check-app-sync.mjs      真浏览器走真界面 → 确认真落到线上数据库（双向）
   cloudflare-setup.mjs    一键部署 Cloudflare 同步后端（幂等，含自测）
+  verify-d1-migration.mjs 在真实 SQLite 上验 0002 迁移（CI 里由 vitest 跑同一套）
 ```
 
 依赖方向（严格单向）：
@@ -110,6 +114,7 @@ React 页面不直接调用任何后端。`cloud/cloudProvider.ts` 是唯一的�
 ```
 灵感 = Record(type = "idea")
 待办 = Record(type = "todo")
+大事 = Record(type = "project")
 ```
 
 四个页面只是对同一份数据的不同观察方式：
@@ -121,23 +126,57 @@ React 页面不直接调用任何后端。`cloud/cloudProvider.ts` 是唯一的�
 | 待办 | 现在还有什么没做 | `type = todo AND completed_at = null AND deleted_at = null` |
 | 日历 | 我在某一天想到了什么 | 按 `created_local_date` 归档 |
 
+导航顺序：首页 / 灵感 / 待办 / 日历。
+
+**大事不是第五个一级页面**，而是首页输入框与时间线之间的一个独立模块
+（「目前在做的大事」），理由是它和时间线回答的是两个相反的问题：
+
+- 时间线 = 我什么时候记下了什么（向后看，按日期归档）
+- 大事模块 = 我现在该先干哪个（向前看，按截止日升序）
+
+所以它单独排、单独建，且只列**未完成**的大事（进度 < 100%）。
+推到 100% 的会从这个模块消失，但**不会丢** —— 它仍然在下面的时间线里，
+也在日历里，想再看到点开详情或者翻时间线即可。
+
 待办页底部另有一块默认折叠的「已完成」区，按 `completed_at` 倒序。
 它不是归档（归档归首页时间线管），而是一块**后悔药** ——
 打勾这个动作太轻，手滑一下那条就从列表里没了，所以任何时候都能从那里撤销。
 
-导航顺序：首页 / 灵感 / 待办 / 日历。
-
 **时间贯穿整个 APP**：首页 / 灵感 / 待办显示 `HH:mm` 与日期分组，
 详情显示 `YYYY年MM月DD日 HH:mm`，日历通过 `created_local_date` 查询。
+
+### 大事（project）
+
+| 字段 | 含义 |
+| --- | --- |
+| `progress` | 0–100 的整数，**只有大事有**，默认 0 |
+| `deadline_local_date` | 截止日，纯日期 `YYYY-MM-DD`，可为空 |
+
+三个刻意的设计决定：
+
+1. **进度落库的时机是「动作结束」，不是「值变化」**。
+   拖一次滑块会产生几十个 `change` 事件，跟着写库就是几十个 mutation
+   打进 outbox、几十次 IndexedDB 事务，而首页那个模块是 liveQuery 驱动的，
+   会跟着重渲染几十次。所以拖动只改界面，松手（`pointerup`）或松开按键
+   （`keyup`）才落库一次。
+2. **截止日存纯日期，不存时刻**。用户想的是「几号之前」，不是「几点之前」。
+   纯日期不带时区，换设备不会从 10 月 5 日漂成 10 月 4 日。
+3. **两端都改进度时不做「取较大值」**。那看起来聪明，实际会把
+   「本机刚把进度退回 0 重新做」直接抹掉。语义不明的合并宁可交给用户裁决。
+
+进度与截止日的收敛（`clampProgress` / `clampDeadlineLocalDate`）放在**边界**上，
+两套后端适配器、worker 出口、仓库层都会过一遍 —— 免得界面出现 `width: NaN%`
+或者一个不存在的「13月45日」。
 
 ### 时间字段互不混用
 
 | 字段 | 含义 | 会不会被改写 |
 | --- | --- | --- |
 | `created_at_utc` / `created_timezone` / `created_local_date` | 第一次写下的那一刻 | **永不改变** |
-| `updated_at_utc` / `updated_timezone` | 最后一次编辑 | 只在编辑正文时更新 |
+| `updated_at_utc` / `updated_timezone` | 最后一次编辑（改进度、改截止日也算） | 只在编辑时更新 |
 | `completed_at_utc` / `completed_timezone` | 完成时间 | 打勾时写入 |
 | `deleted_at_utc` | 软删除时间 | 删除时写入 |
+| `deadline_local_date` | 大事的截止日（用户自己设的） | 用户改时更新 |
 | `server_updated_at` | 服务器同步时间 | 只用于同步，绝不覆盖用户记录时间 |
 
 即使离线 4 小时才同步，创建时间仍然是用户当时写下的那一刻。
@@ -261,6 +300,36 @@ npm run cloudflare:setup -- --subdomain=名字  # 指定 workers.dev 子域名
 > 事后无法从库里取回明文 —— 请当场复制走。
 > 丢了不要紧，重跑一次 `--token-only` 就会发一个新的（旧的仍然有效）。
 
+#### 已经部署过？升级到「大事」要跑一次迁移
+
+`worker/schema.sql` 里的 `create table if not exists` 对**已存在的表整段跳过**，
+所以光重新部署 Worker 不会给老库加上新列 —— 老库必须单独跑一次迁移。
+
+```bash
+# 1) 先备份（强烈建议，这一步是后悔药）
+npx wrangler d1 export yike-sync --remote --output backup-$(date +%F).sql
+
+# 2) 再迁移
+npx wrangler d1 execute yike-sync --remote --file=worker/migrations/0002_project_type.sql
+```
+
+这个迁移**必须重建 `records` 表**，因为 SQLite 改不了 CHECK 约束。
+重建的顺序是：drop 触发器 → rename 留底 → 建新表 → 搬数据 → drop 旧表
+→ 重建索引 → 重建触发器。里面任何一步写漏都**不会报错**：
+
+- 索引忘了重建 → 查询悄悄退化成全表扫描，功能看着一切正常
+- 触发器忘了重建 → 「创建时间不可变」「只能软删除」这些红线**直接消失**
+- 列顺序写错 → 数据静默串列（`content` 里装着时间戳）
+
+所以这个迁移有一份**专门的测试**（`src/test/d1Migration.test.ts`），
+在真实 SQLite 上从老 schema + 真实数据跑到新 schema，然后逐项验：
+数据一条不少、索引与四个触发器一个不少、红线依然有效、新能力可用，
+最后还要求**迁移结果与全新安装逐列、逐触发器完全一致**。
+
+> 迁移测试的输入是 `worker/migrations/__fixtures__/schema-0001.sql` ——
+> 迁移**之前**那份 schema 的冻结副本。它是历史事实，
+> **永远不要跟着 `worker/schema.sql` 一起改**，否则这个测试会彻底失去意义。
+
 #### 产品红线是数据库约束，不是文档里的约定
 
 `worker/schema.sql` 里有四个触发器，把「不能丢数据」这件事变成了数据库拒绝执行：
@@ -351,7 +420,18 @@ npm run check:app-sync -- \
 
 ### 方案 B：Supabase（用现成的托管服务）
 
-> **国内用户推荐这个**：`supabase.co` 在国内可直达，不用买域名、不用开 VPN。
+> ⚠️ **国内可达性实测提醒（2026-10）**：`supabase.com`（**官网**，托管在 Vercel）
+> 能打开，但**项目 API 走的是另一套 IP（AWS）**，实测在国内被 TLS 层掐断
+> （`ERR_CONNECTION_CLOSED`，手机和电脑都是）。这是 2021 年就报过的长期问题
+> （supabase/supabase-js#2631）。
+>
+> 所以：**「官网能开」不等于「项目 API 可用」**，这两件事必须分开测。
+> 国内用户请优先用方案 A（Cloudflare）；如果只有 Supabase 能连，也请先
+> 用真设备试一次 `POST /rest/v1/` 再往下做。
+>
+> 同理，`*.workers.dev` / `*.vercel.app` / `*.fly.dev` 这些「免费托管平台
+> 自带的后缀域名」在国内基本都被针对。最稳的做法是**买一个自己的域名**
+> 绑到后端上 —— 代码和数据一行都不用改。
 
 #### 1. 建组织，再建项目
 
@@ -384,6 +464,13 @@ supabase/migrations/0001_init.sql
 
 - 用户只能 `SELECT` / `INSERT` / `UPDATE` 自己的数据（`user_id = auth.uid()`）
 - **故意不创建 DELETE 策略** → 物理删除在数据库层面被彻底禁止
+
+> **如果你的库是「大事」之前建的**，再执行一次
+> `supabase/migrations/0002_project_type.sql`。
+> Postgres 加列不需要重建表（`add column if not exists`），
+> 但**必须重定义 `apply_record_mutation`** —— 老版本不知道
+> `progress` / `deadline_local_date` 两个字段，会把它们当未知字段丢掉。
+> 这个脚本是幂等的，跑第二遍什么都不会发生。
 
 > Supabase 会弹一个「**检测到潜在问题 / 破坏性操作**」的确认框 —— **点「运行查询」**。
 > 脚本里有几条 `drop ... if exists`（先删后建，为了让脚本可以重复运行），
@@ -530,14 +617,20 @@ npm run test:e2e   # 终端 B
 多设备通过 `FakeCloudServer`（内存版，行为与 `0001_init.sql` 完全一致）
 + 切换独立 IndexedDB 顺序模拟。
 
+大事（`project`）另有三组用例，钉的是它特有的那几条：
+`local.test.ts` 的「只有大事才带进度与截止日 / 越界收敛 / `byDeadlineAsc` 排序」、
+`merge.test.ts` 的「两端都改进度 → 冲突且退回 base，**不做取较大值**」、
+`time.test.ts` 的「倒计时按日历天算，跨月跨年闰年都对，畸形输入不许产出 NaN 天」。
+
 ### 同步后端（Cloudflare）的测试
 
 | 文件 | 测什么 | 数量 |
 | --- | --- | --- |
-| `workerCore.test.ts` | 鉴权 / 幂等 / 版本冲突 / 创建时间不可变 / 跨账号隔离 / 竞态 | 39 |
+| `workerCore.test.ts` | 鉴权 / 幂等 / 版本冲突 / 创建时间不可变 / 跨账号隔离 / 竞态 / 大事字段 | 41 |
 | `workerHttp.test.ts` | 401 / 400 / 404 / CORS / 跨域 / **出错绝不返回成功** | 38 |
-| `workerSchema.test.ts` | 触发器是否真在拦、两套后端表结构是否逐列一致 | 16 |
-| `cloudflareAdapter.test.ts` | 字段归一、状态透传、**失败不装成功** | 34 |
+| `workerSchema.test.ts` | 触发器是否真在拦、两套后端表结构是否逐列一致 | 18 |
+| `d1Migration.test.ts` | **0002 迁移必须重建 records 表**：数据不丢不串、索引与四个触发器一个不少、红线仍有效、迁移结果 == 全新安装 | 15 |
+| `cloudflareAdapter.test.ts` | 字段归一、状态透传、**失败不装成功** | 36 |
 
 **这些测试跑在真实 SQLite 上**（Node 22 内置的 `node:sqlite`，见
 `src/test/sqliteD1.ts`），并且会加载 `worker/schema.sql` 的触发器。
@@ -561,7 +654,7 @@ SQLite 就是 D1 的引擎，所以 `on conflict do nothing`、`insert ... selec
 | 文件 / 脚本 | 测什么 | 数量 |
 | --- | --- | --- |
 | `theme.test.ts` | 显式选择优先于系统、脏值/抛错兜底、`setMode` 落 DOM 与存储、**`index.html` 防闪脚本与存储键不许漂移** | 16 |
-| `check-contrast.mjs` | 从 `index.css` 解析真实令牌，逐对算 WCAG 对比度（浅色 18 对 + 深色 18 对） | 36 |
+| `check-contrast.mjs` | 从 `index.css` 解析真实令牌，逐对算 WCAG 对比度（浅色 22 对 + 深色 22 对） | 44 |
 | `e2e` 暗色模式 | 切换后刷新仍是深色、**首屏不闪**、跟随系统（系统变了自己跟着变） | 3 × 2 端 |
 
 主题本身只有「加/去一个类」，所以在 jsdom 里断言它等于什么都没验 ——
@@ -581,7 +674,7 @@ SQLite 就是 D1 的引擎，所以 `on conflict do nothing`、`insert ... selec
 | CI | `.github/workflows/ci.yml` | 静态门禁 + 对比度 → 单元测试 → 构建 + E2E |
 | 发布 | `.github/workflows/deploy-pages.yml` | 等 CI 全绿 → 子路径构建 → 校验产物路径 → 发布 |
 
-当前基线：**tsc 0 错误 / oxlint 0 warning（222 条规则）/ 214 项单测 + 30 项 E2E 全绿**。
+当前基线：**tsc 0 错误 / oxlint 0 warning（222 条规则）/ 267 项单测 + 34 项 E2E 全绿**。
 
 - 📋 **[代码审查标准与流程](docs/代码审查标准与流程.md)** —— 优先级判据、
   高风险区清单、三级门禁、测试分层策略、审查清单、例外处理
@@ -699,9 +792,14 @@ Linux / macOS / CI 上没有这个问题。
 
 ## V1 边界
 
-不做：标签、文件夹、多级分类、优先级、截止日期、提醒、闹钟、周期任务、
+不做：标签、文件夹、多级分类、优先级、提醒、闹钟、周期任务、
 子任务、看板、甘特图、Markdown、富文本、图片、附件、录音、AI、RAG、
 番茄钟、习惯打卡、数据统计、社交、团队协作。
+
+**关于「截止日期」**：待办仍然没有截止日，也不会有 —— 那是任务管理器的路子。
+大事有一个 `deadline_local_date`，但它是**纯日期、只用来算倒计时**，
+不是排期：没有开始时间、没有时段、没有「今天要做哪几件」的日程表。
+它就是「这件事我希望几号之前弄完」，多一个字都不做。
 
 V1 不做计划时间：`scheduled_at` 留给未来，且绝不会复用 `created_at`。
 

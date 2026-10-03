@@ -20,6 +20,13 @@ function todayInShanghai(): string {
   }).format(new Date())
 }
 
+/** 上海时区下「今天 ± N 天」的纯日期，用来测大事倒计时 */
+function daysFromTodayInShanghai(days: number): string {
+  const base = new Date(`${todayInShanghai()}T00:00:00Z`)
+  base.setUTCDate(base.getUTCDate() + days)
+  return base.toISOString().slice(0, 10)
+}
+
 async function openApp(page: Page): Promise<void> {
   await page.goto('/')
   await expect(page.getByTestId('quick-capture')).toBeVisible()
@@ -378,5 +385,108 @@ test.describe('移动端体验（§70）', () => {
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
     )
     expect(overflow).toBeLessThanOrEqual(1)
+  })
+})
+
+/**
+ * 大事（目前在做的大事）—— 首页的第三个功能。
+ *
+ * 它是**独立一栏**，插在输入框与时间线之间，和「记为灵感 / 记为待办」
+ * 那种快车道刻意分开：大事要多填一个截止日，塞进快车道会拖慢最常用的路径。
+ */
+test.describe('大事：目前在做的大事', () => {
+  test('新建带截止日的大事 → 模块与时间线都出现 → 详情改进度 → 刷新仍在', async ({ page }) => {
+    await openApp(page)
+
+    const module = page.getByTestId('project-module')
+    await expect(module).toBeVisible()
+    await expect(module.getByText('目前在做的大事')).toBeVisible()
+    await expect(module.getByText('还没有大事')).toBeVisible()
+
+    // 截止日设成 5 天后 → 模块里应显示「还剩 5 天」
+    await page.getByTestId('project-add').click()
+    await page.getByTestId('project-create-input').fill('把机械臂调通')
+    await page.getByTestId('project-create-deadline').fill(daysFromTodayInShanghai(5))
+    await page.getByTestId('project-create-save').click()
+
+    const row = page.getByTestId('project-row').filter({ hasText: '把机械臂调通' })
+    await expect(row).toBeVisible()
+    await expect(row.getByText('0%')).toBeVisible()
+    await expect(row.getByTestId('project-deadline')).toHaveText(/还剩 5 天/)
+    await expect(module.getByText('1 件')).toBeVisible()
+
+    // 时间线里也出现（用户拍板：出现，但只显示内容 + 时间）
+    await expect(timeline(page).getByText('把机械臂调通')).toBeVisible()
+
+    // 点开详情 → 用档位按钮把进度推到 50%
+    await row.click()
+    const editor = page.getByTestId('project-editor')
+    await expect(editor).toBeVisible()
+    await expect(page.getByTestId('project-percent')).toHaveText('0%')
+
+    await page.getByTestId('project-preset-50').click()
+    await expect(page.getByTestId('project-percent')).toHaveText('50%')
+
+    // 刷新后进度落库了，模块上也是 50%
+    await page.reload()
+    const afterReload = page.getByTestId('project-row').filter({ hasText: '把机械臂调通' })
+    await expect(afterReload).toBeVisible()
+    await expect(afterReload.getByText('50%')).toBeVisible()
+
+    // 推到 100% → 从「在做的大事」里消失，但时间线里还在（没丢）
+    await afterReload.click()
+    await page.getByTestId('project-finish').click()
+    await expect(page.getByTestId('project-percent')).toHaveText('100%')
+    await expect(page.getByTestId('project-editor').getByText('已完成')).toBeVisible()
+
+    await page.reload()
+    await expect(page.getByTestId('project-row').filter({ hasText: '把机械臂调通' })).toHaveCount(0)
+    await expect(page.getByTestId('project-module').getByText('还没有大事')).toBeVisible()
+    await expect(timeline(page).getByText('把机械臂调通')).toBeVisible()
+  })
+
+  test('先记下来不设截止日 → 详情里补上后出现倒计时，过期会红', async ({ page }) => {
+    await openApp(page)
+
+    await page.getByTestId('project-add').click()
+    await page.getByTestId('project-create-input').fill('写完论文初稿')
+    await page.getByTestId('project-create-save').click()
+
+    const row = page.getByTestId('project-row').filter({ hasText: '写完论文初稿' })
+    await expect(row).toBeVisible()
+    // 没设截止日 → 模块里不显示倒计时
+    await expect(row.getByTestId('project-deadline')).toHaveCount(0)
+
+    await row.click()
+    const editor = page.getByTestId('project-editor')
+    await expect(editor.getByText('还没设截止日')).toBeVisible()
+
+    // 补一个 3 天后的截止日（详情里的倒计时不附具体日期，模块里的会附）
+    await page.getByTestId('project-deadline-input').fill(daysFromTodayInShanghai(3))
+    await expect(editor.getByTestId('project-deadline')).toHaveText('还剩 3 天')
+
+    // 改成已经过期的日子 → 显示「已过期」，且用的是红色（danger）
+    await page.getByTestId('project-deadline-input').fill(daysFromTodayInShanghai(-3))
+    const countdown = editor.getByTestId('project-deadline')
+    await expect(countdown).toHaveText('已过期 3 天')
+    const color = await countdown.evaluate((el) => getComputedStyle(el).color)
+    const danger = await page.evaluate(() =>
+      getComputedStyle(document.documentElement).getPropertyValue('--color-danger').trim(),
+    )
+    expect(danger).not.toBe('')
+    // 把令牌值（#rrggbb）转成 rgb 再比，避免格式差异
+    const probe = await page.evaluate((hex) => {
+      const div = document.createElement('div')
+      div.style.color = hex
+      document.body.append(div)
+      const value = getComputedStyle(div).color
+      div.remove()
+      return value
+    }, danger)
+    expect(color).toBe(probe)
+
+    // 清除后回到「还没设截止日」
+    await page.getByTestId('project-deadline-clear').click()
+    await expect(editor.getByText('还没设截止日')).toBeVisible()
   })
 })

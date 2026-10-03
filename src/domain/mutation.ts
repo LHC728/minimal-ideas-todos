@@ -20,6 +20,10 @@ export type MutationState = 'pending' | 'sending' | 'failed'
 export interface MutationPayload {
   type?: RecordType
   content?: string
+  /** 大事进度 0–100；`null` 表示显式清空 */
+  progress?: number | null
+  /** 大事截止日 `YYYY-MM-DD`；`null` 表示显式清空 */
+  deadlineLocalDate?: string | null
   createdAtUtc?: string
   createdTimezone?: string
   createdLocalDate?: string

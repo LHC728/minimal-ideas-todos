@@ -187,6 +187,68 @@ export function addDays(localDate: string, days: number): string {
   return base.toISOString().slice(0, 10)
 }
 
+/**
+ * 两个纯日期之间的天数差（`to - from`）。
+ *
+ * 为什么不用 `new Date(a).getTime() - new Date(b).getTime()`：
+ * `new Date('2026-10-05')` 确实按 UTC 解析，但只要输入形状稍微变一下
+ * （`'2026-10-05T00:00'`、`'2026/10/05'`）就会按**本地时区**解析，
+ * 差值立刻不再是整数天。这里手工拆年月日再走 `Date.UTC`，
+ * 时区从头到尾不参与运算。
+ *
+ * 任一输入非法时返回 null —— 由调用方决定怎么降级。
+ * 绝不返回 NaN 或一个看似正常实则错了一天的天数。
+ */
+export function daysBetweenLocalDates(from: string, to: string): number | null {
+  const a = parseLocalDate(from)
+  const b = parseLocalDate(to)
+  if (!a || !b) return null
+  const fromMs = Date.UTC(a.year, a.month - 1, a.day)
+  const toMs = Date.UTC(b.year, b.month - 1, b.day)
+  return Math.round((toMs - fromMs) / 86_400_000)
+}
+
+/**
+ * 倒计时的语气。
+ *   overdue = 已经到点或过点了（红色）
+ *   soon    = 三天以内（提前预警，但不是红色）
+ *   calm    = 还早
+ */
+export type DeadlineTone = 'calm' | 'soon' | 'overdue'
+
+export interface DeadlineCountdown {
+  /** 「还剩 12 天」「明天到期」「今天到期」「已过期 3 天」 */
+  text: string
+  tone: DeadlineTone
+  /** 距离截止日的天数：正数=还没到，0=今天，负数=已过期 */
+  days: number
+}
+
+/** 三天以内开始预警（含今天和已过期） */
+const SOON_DAYS = 3
+
+/**
+ * 大事的截止日倒计时。
+ *
+ * 以「天」为单位，不是「时:分:秒」—— 大事的粒度就是天，
+ * 显示到秒只会每秒重渲染一次而信息量没增加。
+ *
+ * `today` 由调用方传入而不是在这里取当前时间，是为了让它是纯函数：
+ * 可测、可在跨天时由调用方统一刷新。
+ */
+export function deadlineCountdown(
+  deadlineLocalDate: string,
+  today: string,
+): DeadlineCountdown | null {
+  const days = daysBetweenLocalDates(today, deadlineLocalDate)
+  if (days === null) return null
+
+  if (days < 0) return { text: `已过期 ${-days} 天`, tone: 'overdue', days }
+  if (days === 0) return { text: '今天到期', tone: 'overdue', days }
+  if (days === 1) return { text: '明天到期', tone: 'soon', days }
+  return { text: `还剩 ${days} 天`, tone: days <= SOON_DAYS ? 'soon' : 'calm', days }
+}
+
 /** 当前日历日 */
 export function todayLocalDate(tz?: string | null): string {
   return localDateOf(new Date(), tz)

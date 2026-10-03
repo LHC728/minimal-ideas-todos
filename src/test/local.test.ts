@@ -12,9 +12,21 @@ import {
   softDelete,
   uncompleteTodo,
   updateContent,
+  updateDeadline,
+  updateProjectProgress,
 } from '../db/recordRepository'
 import { listAllPending } from '../db/outboxRepository'
-import { groupByLocalDate, byCompletedAtDesc, isDoneTodo, isOpenTodo, isOnTimeline } from '../domain/record'
+import {
+  byDeadlineAsc,
+  clampDeadlineLocalDate,
+  clampProgress,
+  groupByLocalDate,
+  byCompletedAtDesc,
+  isDoneTodo,
+  isOpenProject,
+  isOpenTodo,
+  isOnTimeline,
+} from '../domain/record'
 import { cleanupDevices, reopenDevice, openDevice } from './fakeCloudServer'
 
 const USER = 'user-local'
@@ -296,5 +308,247 @@ describe('时间线排序与分组', () => {
     expect(pending[0]?.operation).toBe('create')
     expect(pending[0]?.payload.content).toBe('第 6 版')
     expect(pending[0]?.baseServerVersion).toBeNull()
+  })
+})
+
+/**
+ * 大事（project）—— Record 的第三种类型。
+ *
+ * 这里要锁死三件事：
+ *   1. 只有大事才带进度 / 截止日；灵感与待办即使调用方传了值也一律丢弃
+ *   2. 进度与截止日改动都会走 outbox（离线也要能改）
+ *   3. 收敛函数不许把畸形输入放进库里（否则界面会出现 width: NaN%）
+ */
+describe('大事：进度与截止日', () => {
+  it('创建大事时带进度与截止日', async () => {
+    const project = await createRecord({
+      userId: USER,
+      type: 'project',
+      content: '做一个机械臂',
+      progress: 30,
+      deadlineLocalDate: '2026-10-15',
+      nowUtc: '2026-09-29T16:14:00.000Z',
+      timezone: TZ,
+    })
+
+    expect(project.type).toBe('project')
+    expect(project.progress).toBe(30)
+    expect(project.deadlineLocalDate).toBe('2026-10-15')
+    expect(project.completedAtUtc).toBeNull()
+  })
+
+  it('创建大事不给进度时默认 0，截止日默认 null', async () => {
+    const project = await createRecord({
+      userId: USER,
+      type: 'project',
+      content: '还没想好截止日',
+      nowUtc: '2026-09-29T16:14:00.000Z',
+      timezone: TZ,
+    })
+
+    expect(project.progress).toBe(0)
+    expect(project.deadlineLocalDate).toBeNull()
+  })
+
+  it('灵感 / 待办即使传了进度和截止日也一律丢弃', async () => {
+    const idea = await createRecord({
+      userId: USER,
+      type: 'idea',
+      content: '随手记的想法',
+      progress: 80,
+      deadlineLocalDate: '2026-10-15',
+      nowUtc: '2026-09-29T16:14:00.000Z',
+      timezone: TZ,
+    })
+    const todo = await createRecord({
+      userId: USER,
+      type: 'todo',
+      content: '买螺丝刀',
+      progress: 80,
+      deadlineLocalDate: '2026-10-15',
+      nowUtc: '2026-09-29T16:20:00.000Z',
+      timezone: TZ,
+    })
+
+    expect(idea.progress).toBeNull()
+    expect(idea.deadlineLocalDate).toBeNull()
+    expect(todo.progress).toBeNull()
+    expect(todo.deadlineLocalDate).toBeNull()
+  })
+
+  it('改进度：落库 + 进 outbox（离线也能改）', async () => {
+    const project = await createRecord({
+      userId: USER,
+      type: 'project',
+      content: '做一个机械臂',
+      nowUtc: '2026-09-29T16:14:00.000Z',
+      timezone: TZ,
+    })
+
+    const updated = await updateProjectProgress(project.id, 60, '2026-09-30T03:00:00.000Z', TZ)
+    expect(updated?.progress).toBe(60)
+
+    // 刷新后仍在
+    await reopenDevice(device)
+    const after = await db.records.get(project.id)
+    expect(after?.progress).toBe(60)
+    expect(after?.updatedAtUtc).toBe('2026-09-30T03:00:00.000Z')
+  })
+
+  it('改进度到相同的值 → 不产生多余的写（幂等）', async () => {
+    const project = await createRecord({
+      userId: USER,
+      type: 'project',
+      content: '做一个机械臂',
+      progress: 40,
+      nowUtc: '2026-09-29T16:14:00.000Z',
+      timezone: TZ,
+    })
+
+    const again = await updateProjectProgress(project.id, 40, '2026-09-30T03:00:00.000Z', TZ)
+    expect(again?.progress).toBe(40)
+    expect(again?.updatedAtUtc).toBe('2026-09-29T16:14:00.000Z') // 没被改
+  })
+
+  it('设截止日与清除截止日', async () => {
+    const project = await createRecord({
+      userId: USER,
+      type: 'project',
+      content: '做一个机械臂',
+      nowUtc: '2026-09-29T16:14:00.000Z',
+      timezone: TZ,
+    })
+
+    const set = await updateDeadline(project.id, '2026-10-15', '2026-09-30T03:00:00.000Z', TZ)
+    expect(set?.deadlineLocalDate).toBe('2026-10-15')
+
+    const cleared = await updateDeadline(project.id, null, '2026-09-30T04:00:00.000Z', TZ)
+    expect(cleared?.deadlineLocalDate).toBeNull()
+  })
+
+  it('对灵感 / 待办调用改进度或改截止日 → 字段一动不动，也不产生多余的 mutation', async () => {
+    const todo = await createRecord({
+      userId: USER,
+      type: 'todo',
+      content: '买螺丝刀',
+      nowUtc: '2026-09-29T16:14:00.000Z',
+      timezone: TZ,
+    })
+
+    // commitChange 的契约是「没有变化就返回原记录（而不是 null）」，
+    // 这里断言的是**字段没被动过**，而不是返回值形状。
+    const afterProgress = await updateProjectProgress(todo.id, 50, '2026-09-30T03:00:00.000Z', TZ)
+    expect(afterProgress?.progress).toBeNull()
+
+    const afterDeadline = await updateDeadline(todo.id, '2026-10-15', '2026-09-30T03:00:00.000Z', TZ)
+    expect(afterDeadline?.deadlineLocalDate).toBeNull()
+
+    const after = await db.records.get(todo.id)
+    expect(after?.progress).toBeNull()
+    expect(after?.deadlineLocalDate).toBeNull()
+    // 只有创建时那一条 mutation，没有多出 update
+    const pending = await listAllPending(USER)
+    expect(pending).toHaveLength(1)
+    expect(pending[0]?.operation).toBe('create')
+  })
+
+  it('进度越界会被收敛进 0..100，畸形输入不会进库', async () => {
+    const project = await createRecord({
+      userId: USER,
+      type: 'project',
+      content: '做一个机械臂',
+      nowUtc: '2026-09-29T16:14:00.000Z',
+      timezone: TZ,
+    })
+
+    expect((await updateProjectProgress(project.id, 999, '2026-09-30T03:00:00.000Z', TZ))?.progress).toBe(100)
+    expect((await updateProjectProgress(project.id, -20, '2026-09-30T04:00:00.000Z', TZ))?.progress).toBe(0)
+    // NaN / 非数字 → 拒绝，保持原值
+    expect(await updateProjectProgress(project.id, Number.NaN, '2026-09-30T05:00:00.000Z', TZ)).toBeNull()
+  })
+
+  it('clampProgress / clampDeadlineLocalDate 的边界行为', () => {
+    expect(clampProgress(50)).toBe(50)
+    expect(clampProgress(150)).toBe(100)
+    expect(clampProgress(-5)).toBe(0)
+    expect(clampProgress(33.6)).toBe(34) // 四舍五入成整数
+    expect(clampProgress(null)).toBeNull()
+    expect(clampProgress(undefined)).toBeNull()
+    expect(clampProgress('')).toBeNull()
+    expect(clampProgress('abc')).toBeNull()
+    expect(clampProgress(Number.NaN)).toBeNull()
+    expect(clampProgress(Number.POSITIVE_INFINITY)).toBeNull()
+
+    expect(clampDeadlineLocalDate('2026-10-15')).toBe('2026-10-15')
+    expect(clampDeadlineLocalDate(null)).toBeNull()
+    expect(clampDeadlineLocalDate('')).toBeNull()
+    expect(clampDeadlineLocalDate('2026-02-30')).toBeNull() // 2 月没有 30 日
+    expect(clampDeadlineLocalDate('2026-13-01')).toBeNull()
+    expect(clampDeadlineLocalDate(123)).toBeNull()
+  })
+
+  it('isOpenProject：100% 或已删除的不算「在做」', async () => {
+    const doing = await createRecord({
+      userId: USER,
+      type: 'project',
+      content: '进行中的',
+      progress: 40,
+      nowUtc: '2026-09-29T16:14:00.000Z',
+      timezone: TZ,
+    })
+    const finished = await createRecord({
+      userId: USER,
+      type: 'project',
+      content: '做完的',
+      progress: 100,
+      nowUtc: '2026-09-29T16:20:00.000Z',
+      timezone: TZ,
+    })
+    const deleted = await createRecord({
+      userId: USER,
+      type: 'project',
+      content: '删掉的',
+      progress: 10,
+      nowUtc: '2026-09-29T16:30:00.000Z',
+      timezone: TZ,
+    })
+    await softDelete(deleted.id, '2026-09-30T03:00:00.000Z')
+
+    // 软删后要重新读一次 —— 内存里那个对象还是删除前的快照
+    const deletedAfter = await db.records.get(deleted.id)
+
+    expect(isOpenProject(doing)).toBe(true)
+    expect(isOpenProject(finished)).toBe(false)
+    expect(deletedAfter).toBeDefined()
+    expect(isOpenProject(deletedAfter as NonNullable<typeof deletedAfter>)).toBe(false)
+  })
+
+  it('byDeadlineAsc：有截止日的排前面且按日期升序，没截止日的排最后', async () => {
+    const noDeadline = await createRecord({
+      userId: USER,
+      type: 'project',
+      content: '没有截止日',
+      nowUtc: '2026-09-29T16:14:00.000Z',
+      timezone: TZ,
+    })
+    const late = await createRecord({
+      userId: USER,
+      type: 'project',
+      content: '晚一点',
+      deadlineLocalDate: '2026-10-20',
+      nowUtc: '2026-09-29T16:20:00.000Z',
+      timezone: TZ,
+    })
+    const soon = await createRecord({
+      userId: USER,
+      type: 'project',
+      content: '快到了',
+      deadlineLocalDate: '2026-10-05',
+      nowUtc: '2026-09-29T16:30:00.000Z',
+      timezone: TZ,
+    })
+
+    const sorted = [noDeadline, late, soon].toSorted(byDeadlineAsc)
+    expect(sorted.map((r) => r.content)).toEqual(['快到了', '晚一点', '没有截止日'])
   })
 })

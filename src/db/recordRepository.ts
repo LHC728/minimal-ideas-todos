@@ -16,7 +16,7 @@ import type {
   RecordType,
   SyncState,
 } from '../domain/record'
-import { snapshotOf } from '../domain/record'
+import { snapshotOf, clampDeadlineLocalDate, clampProgress, PROGRESS_MIN } from '../domain/record'
 import type { Mutation, MutationOperation, MutationPayload } from '../domain/mutation'
 import { uuidv4 } from '../utils/id'
 import { captureNow } from '../utils/timezone'
@@ -28,6 +28,10 @@ export interface CreateRecordInput {
   userId: string
   type: RecordType
   content: string
+  /** 大事的初始进度，默认 0；非大事忽略 */
+  progress?: number
+  /** 大事的截止日 `YYYY-MM-DD`；非大事忽略 */
+  deadlineLocalDate?: string | null
   /** 用于测试注入；默认取当前时刻 */
   nowUtc?: string
   timezone?: string | null
@@ -46,11 +50,19 @@ export async function createRecord(input: CreateRecordInput): Promise<LocalRecor
   const captured = captureNow(input.nowUtc, input.timezone)
   const content = input.content.trim()
 
+  // 只有大事才有进度和截止日。灵感 / 待办即使调用方传了值也一律丢弃 ——
+  // 「灵感有 30% 进度」是没有意义的，让它落库只会在以后到处长出分支。
+  const isProject = input.type === 'project'
+  const progress = isProject ? (clampProgress(input.progress ?? PROGRESS_MIN) ?? PROGRESS_MIN) : null
+  const deadlineLocalDate = isProject ? clampDeadlineLocalDate(input.deadlineLocalDate) : null
+
   const record: LocalRecord = {
     id: uuidv4(),
     userId: input.userId,
     type: input.type,
     content,
+    progress,
+    deadlineLocalDate,
     createdAtUtc: captured.utc,
     createdTimezone: captured.timezone,
     createdLocalDate: captured.localDate,
@@ -73,6 +85,8 @@ export async function createRecord(input: CreateRecordInput): Promise<LocalRecor
     payload: {
       type: record.type,
       content: record.content,
+      progress: record.progress,
+      deadlineLocalDate: record.deadlineLocalDate,
       createdAtUtc: record.createdAtUtc,
       createdTimezone: record.createdTimezone,
       createdLocalDate: record.createdLocalDate,
@@ -113,6 +127,56 @@ export async function updateContent(
     record.updatedAtUtc = ctx.utc
     record.updatedTimezone = ctx.timezone
     return { content: next, updatedAtUtc: ctx.utc, updatedTimezone: ctx.timezone }
+  })
+}
+
+// ---------------------------------------------------------------
+// 大事：进度 / 截止日
+// ---------------------------------------------------------------
+
+/**
+ * 更新大事的进度。
+ *
+ * 返回值同为 null 有两种情况：值没变（不必写库），或这条不是大事。
+ * 两者对调用方都是「什么都不用做」。
+ */
+export async function updateProjectProgress(
+  recordId: string,
+  progress: number,
+  nowUtc?: string,
+  timezone?: string | null,
+): Promise<LocalRecord | null> {
+  const next = clampProgress(progress)
+  if (next === null) return null
+
+  return commitChange(recordId, 'update', nowUtc, timezone, (record, ctx) => {
+    if (record.type !== 'project') return null
+    if (record.progress === next) return null
+    record.progress = next
+    // 进度变化确实是一次编辑，updatedAt 要跟着走 ——
+    // 否则「最后编辑」会停在上一次改正文的时候，看着像没保存成功。
+    record.updatedAtUtc = ctx.utc
+    record.updatedTimezone = ctx.timezone
+    return { progress: next, updatedAtUtc: ctx.utc, updatedTimezone: ctx.timezone }
+  })
+}
+
+/** 设置或清除大事的截止日；传 null 表示清除 */
+export async function updateDeadline(
+  recordId: string,
+  deadlineLocalDate: string | null,
+  nowUtc?: string,
+  timezone?: string | null,
+): Promise<LocalRecord | null> {
+  const next = clampDeadlineLocalDate(deadlineLocalDate)
+
+  return commitChange(recordId, 'update', nowUtc, timezone, (record, ctx) => {
+    if (record.type !== 'project') return null
+    if (record.deadlineLocalDate === next) return null
+    record.deadlineLocalDate = next
+    record.updatedAtUtc = ctx.utc
+    record.updatedTimezone = ctx.timezone
+    return { deadlineLocalDate: next, updatedAtUtc: ctx.utc, updatedTimezone: ctx.timezone }
   })
 }
 
@@ -235,6 +299,10 @@ function fromCloud(cloud: CloudRecord, syncState: SyncState): LocalRecord {
     userId: cloud.userId,
     type: cloud.type,
     content: cloud.content,
+    // 远端可能来自一个还没跑过迁移的旧库（列不存在 → undefined），
+    // 也可能存着越界的脏值。统一在这里收敛，别让脏数据进到领域模型。
+    progress: clampProgress(cloud.progress),
+    deadlineLocalDate: clampDeadlineLocalDate(cloud.deadlineLocalDate),
     createdAtUtc: cloud.createdAtUtc,
     createdTimezone: cloud.createdTimezone,
     createdLocalDate: cloud.createdLocalDate,
@@ -291,6 +359,8 @@ export async function replaceWithSnapshot(
   await db.records.where('id').equals(recordId).modify((record) => {
     record.type = snapshot.type
     record.content = snapshot.content
+    record.progress = snapshot.progress
+    record.deadlineLocalDate = snapshot.deadlineLocalDate
     record.createdAtUtc = snapshot.createdAtUtc
     record.createdTimezone = snapshot.createdTimezone
     record.createdLocalDate = snapshot.createdLocalDate
@@ -348,6 +418,8 @@ export async function migrateLocalRecordsToUser(targetUserId: string): Promise<n
         payload: {
           type: next.type,
           content: next.content,
+          progress: next.progress,
+          deadlineLocalDate: next.deadlineLocalDate,
           createdAtUtc: next.createdAtUtc,
           createdTimezone: next.createdTimezone,
           createdLocalDate: next.createdLocalDate,
